@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { runCommand } from "../src/cli/run.js";
 import type { TaskAnalystProvider } from "../src/agents/taskAnalyst.js";
 import { taskBriefSchema, type TaskBrief } from "../src/schemas/taskBrief.js";
+import type { CodingWorker } from "../src/codingWorker.js";
 
 const brief: TaskBrief = {
   objective: "Analyze a demo task.",
@@ -27,12 +28,31 @@ describe("runCommand", () => {
     );
 
     const provider: TaskAnalystProvider = { analyze: async () => brief };
+    const calls: string[] = [];
+    const codingWorker: CodingWorker = {
+      executeTask: async (input) => {
+        calls.push(input.instruction);
+        return {
+          threadId: "thread-cli",
+          finalResponse: "fake worker done",
+          workspacePath: path.join(input.runDir, "workspace"),
+          changedFiles: ["README.md"],
+          diff: "diff --git a/README.md b/README.md\n",
+          status: " M README.md\n",
+        };
+      },
+    };
 
-    await runCommand(["--project", "demo", "--task", "Test task"], { cwd, runsDir, taskAnalystProvider: provider });
+    await runCommand(["--project", "demo", "--task", "Test task"], { cwd, runsDir, taskAnalystProvider: provider, codingWorker });
 
     const runDirs = await import("node:fs/promises").then((fs) => fs.readdir(runsDir));
     expect(runDirs).toHaveLength(1);
     const taskBrief = JSON.parse(await readFile(path.join(runsDir, runDirs[0]!, "task-brief.json"), "utf8"));
     expect(taskBriefSchema.parse(taskBrief)).toEqual(brief);
+    expect(calls).toEqual([brief.codexInstruction]);
+    const codingResult = JSON.parse(await readFile(path.join(runsDir, runDirs[0]!, "coding-result.json"), "utf8"));
+    expect(codingResult.changedFiles).toEqual(["README.md"]);
+    await expect(readFile(path.join(runsDir, runDirs[0]!, "workspace.diff"), "utf8")).resolves.toContain("diff --git");
+    await expect(readFile(path.join(runsDir, runDirs[0]!, "workspace-status.txt"), "utf8")).resolves.toContain("README.md");
   });
 });
