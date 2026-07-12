@@ -1,11 +1,13 @@
 import { analyzeTaskBrief, writeTaskBrief, type TaskAnalystProvider } from "../agents/taskAnalyst.js";
 import { loadProjectConfig } from "../config/loadConfig.js";
 import { createRun } from "../runs/createRun.js";
+import { CodexSdkWorker, writeCodingArtifacts, type CodingWorker } from "../codingWorker.js";
 
 type RunCliOptions = {
   cwd?: string;
   runsDir?: string;
   taskAnalystProvider?: TaskAnalystProvider;
+  codingWorker?: CodingWorker;
 };
 
 function readOption(args: string[], name: string): string | undefined {
@@ -36,6 +38,15 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
   const run = await createRun(projectId, goal, configPath, { runsDir: options.runsDir });
   const analysis = await analyzeTaskBrief(goal, projectId, { provider: options.taskAnalystProvider });
   const taskBriefPath = await writeTaskBrief(run.runDir, analysis.taskBrief);
+  const codingWorker = options.codingWorker ?? new CodexSdkWorker();
+  const codingResult = await codingWorker.executeTask({
+    instruction: analysis.taskBrief.codexInstruction,
+    repositoryPath: loaded.absoluteRepoPath,
+    baseBranch: loaded.config.project.baseBranch,
+    runId: run.runId,
+    runDir: run.runDir,
+  });
+  const codingArtifacts = await writeCodingArtifacts(run.runDir, analysis.taskBrief, codingResult);
 
   console.log("CatOS run created");
   console.log(`Run ID: ${run.runId}`);
@@ -43,5 +54,12 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
   console.log(`Repository: ${loaded.absoluteRepoPath}`);
   console.log(`Input: ${run.inputPath}`);
   console.log(`Task brief: ${taskBriefPath}`);
+  console.log(`Workspace: ${codingResult.workspacePath}`);
+  console.log(`Changed files: ${codingResult.changedFiles.length}`);
+  if (codingResult.changedFiles.length === 0) {
+    console.log("Codex Worker completed without file changes.");
+  }
+  console.log(`Diff: ${codingArtifacts.diffPath}`);
+  console.log(`Codex thread ID: ${codingResult.threadId}`);
   console.log(`Task Analyst attempts: ${analysis.attempts}`);
 }
