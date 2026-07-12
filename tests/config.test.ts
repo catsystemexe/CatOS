@@ -39,6 +39,32 @@ describe("loadProjectConfig", () => {
     expect(loaded.config.project.id).toBe("demo");
     expect(loaded.config.project.name).toBe("Demo project");
     expect(loaded.absoluteRepoPath).toBe(path.join(root, "repo"));
+    expect(loaded.config.codex.sandboxMode).toBe("workspace-write");
+    expect(loaded.config.codex.acknowledgeNoSandbox).toBe(false);
+  });
+
+  it("rejects danger-full-access without explicit acknowledgement", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "catos-danger-config-"));
+    await mkdir(path.join(root, "repo"));
+    await writeConfig(root, `${validConfig("../repo")}codex:
+  sandboxMode: danger-full-access
+`);
+
+    await expect(loadProjectConfig("projects/demo.yaml", root)).rejects.toThrow("acknowledgeNoSandbox");
+  });
+
+  it("accepts danger-full-access with explicit acknowledgement", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "catos-danger-ack-config-"));
+    await mkdir(path.join(root, "repo"));
+    await writeConfig(root, `${validConfig("../repo")}codex:
+  sandboxMode: danger-full-access
+  acknowledgeNoSandbox: true
+`);
+
+    const loaded = await loadProjectConfig("projects/demo.yaml", root);
+
+    expect(loaded.config.codex.sandboxMode).toBe("danger-full-access");
+    expect(loaded.config.codex.acknowledgeNoSandbox).toBe(true);
   });
 
   it("rejects an invalid config", async () => {

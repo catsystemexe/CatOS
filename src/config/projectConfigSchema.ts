@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export const sandboxModeSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
+
 export const projectConfigSchema = z.object({
   project: z.object({
     id: z.string().min(1, "project.id is required"),
@@ -21,6 +23,18 @@ export const projectConfigSchema = z.object({
     allowPush: z.boolean(),
     allowMerge: z.boolean(),
   }),
+  codex: z.object({
+    sandboxMode: sandboxModeSchema.default("workspace-write"),
+    acknowledgeNoSandbox: z.boolean().optional().default(false),
+  }).default({ sandboxMode: "workspace-write", acknowledgeNoSandbox: false }),
+}).superRefine((config, ctx) => {
+  if (config.codex.sandboxMode === "danger-full-access" && !config.codex.acknowledgeNoSandbox) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["codex", "acknowledgeNoSandbox"],
+      message: "codex.acknowledgeNoSandbox: true is required when codex.sandboxMode is danger-full-access",
+    });
+  }
 });
 
 export type ProjectConfig = z.infer<typeof projectConfigSchema>;
