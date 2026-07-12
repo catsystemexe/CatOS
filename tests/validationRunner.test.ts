@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -14,6 +14,15 @@ function nodeCommand(source: string): string {
 
 function command(name: string, source: string, timeoutMs = 5_000): ValidationCommand {
   return { name, command: nodeCommand(source), required: true, timeoutMs };
+}
+
+async function exists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const missingCommand: ValidationCommand = {
@@ -50,10 +59,45 @@ describe("ShellValidationRunner", () => {
 
   it("reports BLOCKED for a timeout", async () => {
     const runner = new ShellValidationRunner();
-    const report = await runner.run({ workspacePath: await workspace(), commands: [command("timeout", "setTimeout(() => {}, 5000)", 50)] });
+    const started = Date.now();
+    const report = await runner.run({ workspacePath: await workspace(), commands: [command("timeout", "setTimeout(() => {}, 5000)", 100)] });
+    const elapsedMs = Date.now() - started;
+
     expect(report.status).toBe("BLOCKED");
     expect(report.results[0]?.status).toBe("BLOCKED");
     expect(report.results[0]?.timedOut).toBe(true);
+    expect(report.results[0]?.durationMs).toBeGreaterThanOrEqual(90);
+    expect(report.results[0]?.durationMs).toBeLessThan(1_000);
+    expect(elapsedMs).toBeLessThan(1_000);
+  });
+
+  it("continues after a timeout and kills the timed-out shell child process", async () => {
+    const ws = await workspace();
+    const delayedFile = path.join(ws, "delayed-child-output.txt");
+    const runner = new ShellValidationRunner();
+    const started = Date.now();
+
+    const report = await runner.run({
+      workspacePath: ws,
+      commands: [
+        command(
+          "timeout",
+          `const fs = require('node:fs'); setTimeout(() => fs.writeFileSync(${JSON.stringify(delayedFile)}, 'late'), 2000); setTimeout(() => {}, 5000);`,
+          100,
+        ),
+        command("second", "console.log('second passed')", 1_000),
+      ],
+    });
+    const elapsedMs = Date.now() - started;
+
+    expect(report.status).toBe("BLOCKED");
+    expect(report.results.map((result) => result.status)).toEqual(["BLOCKED", "PASS"]);
+    expect(report.results[0]?.timedOut).toBe(true);
+    expect(report.results[1]?.stdout).toContain("second passed");
+    expect(elapsedMs).toBeLessThan(1_000);
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(await exists(delayedFile)).toBe(false);
   });
 
   it("continues running commands after an earlier failure", async () => {

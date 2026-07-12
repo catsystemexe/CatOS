@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -58,6 +58,32 @@ function isCommandNotFound(exitCode: number | null, stderr: string): boolean {
   return exitCode === 127 || /not found|not recognized|command not found|is not recognized/i.test(stderr);
 }
 
+function killProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (child.pid === undefined) return;
+
+  try {
+    if (process.platform === "win32") {
+      child.kill(signal);
+      return;
+    }
+
+    // Validation commands are shell command strings. On POSIX systems, detached children
+    // are placed in their own process group, so killing the negative PID terminates both
+    // the shell and any child process it started.
+    process.kill(-child.pid, signal);
+  } catch (error) {
+    const systemError = error as NodeJS.ErrnoException;
+    if (systemError.code !== "ESRCH") {
+      try {
+        child.kill(signal);
+      } catch {
+        // The process may already have exited between the process-group kill attempt and
+        // this fallback. There is nothing else to clean up in that case.
+      }
+    }
+  }
+}
+
 async function runOneCommand(workspacePath: string, command: ValidationCommand): Promise<ValidationCommandResult> {
   const started = Date.now();
 
@@ -67,6 +93,7 @@ async function runOneCommand(workspacePath: string, command: ValidationCommand):
     let settled = false;
     let timedOut = false;
     let child: ReturnType<typeof spawn>;
+    let killTimer: NodeJS.Timeout | undefined;
 
     const finish = (result: Omit<ValidationCommandResult, "durationMs" | "stdout" | "stderr">) => {
       if (settled) return;
@@ -88,6 +115,7 @@ async function runOneCommand(workspacePath: string, command: ValidationCommand):
         shell: true,
         windowsHide: true,
         env: process.env,
+        detached: process.platform !== "win32",
       });
     } catch (error) {
       const err = error as Error;
@@ -106,7 +134,10 @@ async function runOneCommand(workspacePath: string, command: ValidationCommand):
 
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
+      killProcessTree(child, "SIGTERM");
+      killTimer = setTimeout(() => {
+        killProcessTree(child, "SIGKILL");
+      }, 250);
     }, command.timeoutMs);
 
     child.stdout?.setEncoding("utf8");
@@ -115,6 +146,7 @@ async function runOneCommand(workspacePath: string, command: ValidationCommand):
     child.stderr?.on("data", (chunk: string) => { stderr += chunk; });
     child.on("error", (error: Error) => {
       clearTimeout(timer);
+      if (killTimer !== undefined) clearTimeout(killTimer);
       stderr += error.message;
       finish({
         name: command.name,
@@ -128,6 +160,7 @@ async function runOneCommand(workspacePath: string, command: ValidationCommand):
     });
     child.on("close", (exitCode: number | null, signal: NodeJS.Signals | null) => {
       clearTimeout(timer);
+      if (killTimer !== undefined) clearTimeout(killTimer);
       const status = timedOut || isCommandNotFound(exitCode, stderr)
         ? "BLOCKED"
         : exitCode === 0
