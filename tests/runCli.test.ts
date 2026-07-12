@@ -38,7 +38,7 @@ describe("runCommand", () => {
         return {
           threadId: "thread-cli",
           finalResponse: "fake worker done",
-          workspacePath: path.join(input.runDir, "workspace"),
+          workspacePath: path.join(input.workspaceRoot, input.runId, "workspace"),
           changedFiles: ["README.md"],
           diff: "diff --git a/README.md b/README.md\n",
           status: " M README.md\n",
@@ -97,7 +97,7 @@ describe("runCommand", () => {
     expect(codingResult.changedFiles).toEqual(["README.md"]);
     expect(codingResult.sandboxMode).toBe("workspace-write");
     expect(codingResult.sandboxIsolation).toBe("enabled");
-    expect(validationCalls).toEqual([`${path.join(runsDir, runDirs[0]!, "workspace")}|typecheck:npm run typecheck:true:120000,test:npm run test:true:120000,build:npm run build:true:120000`]);
+    expect(validationCalls[0]).toContain(`/${runDirs[0]!}/workspace|typecheck:npm run typecheck:true:120000,test:npm run test:true:120000,build:npm run build:true:120000`);
     const validationReport = JSON.parse(await readFile(path.join(runsDir, runDirs[0]!, "validation-report.json"), "utf8"));
     expect(validationReport.status).toBe("PASS");
     expect(validationReport.results.map((result: { name: string }) => result.name)).toEqual(["typecheck", "test", "build"]);

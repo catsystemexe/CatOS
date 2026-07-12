@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -13,7 +13,7 @@ export type CodingTask = {
   repositoryPath: string;
   baseBranch: string;
   runId: string;
-  runDir: string;
+  workspaceRoot: string;
   sandboxMode?: SandboxMode;
 };
 
@@ -61,6 +61,7 @@ type CodexTurn = {
 export type CodexSdkWorkerOptions = {
   codexFactory?: () => CodexClient;
   git?: (args: string[], cwd?: string) => Promise<GitResult>;
+  catosRoot?: string;
 };
 
 export function normalizeWorkBranchName(runId: string): string {
@@ -73,6 +74,55 @@ export function normalizeWorkBranchName(runId: string): string {
     .replace(/\.lock$/i, "");
   const safeRunId = normalized.length > 0 ? normalized : "run";
   return `catos/${safeRunId}`.slice(0, 200).replace(/[/.-]+$/g, "");
+}
+
+
+function isPathInside(parent: string, child: string): boolean {
+  const relative = path.relative(parent, child);
+  return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function sanitizeRunIdForPath(runId: string): string {
+  return runId.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "") || "run";
+}
+
+async function realpathIfExists(inputPath: string): Promise<string> {
+  try {
+    return await realpath(inputPath);
+  } catch {
+    return path.resolve(inputPath);
+  }
+}
+
+export async function buildIsolatedWorkspacePath(input: { workspaceRoot: string; runId: string; repositoryPath: string; catosRoot?: string }): Promise<string> {
+  const workspaceRoot = path.resolve(input.workspaceRoot);
+  const workspacePath = path.resolve(workspaceRoot, sanitizeRunIdForPath(input.runId), "workspace");
+  const [catosRoot, repositoryPath] = await Promise.all([
+    realpathIfExists(input.catosRoot ?? process.cwd()),
+    realpathIfExists(input.repositoryPath),
+  ]);
+
+  if (!isPathInside(workspaceRoot, workspacePath)) {
+    throw new Error("workspacePath must stay inside configured workspaceRoot.");
+  }
+  if (!workspacePath.includes(`${path.sep}${sanitizeRunIdForPath(input.runId)}${path.sep}`)) {
+    throw new Error("workspacePath must be uniquely tied to runId.");
+  }
+  if (isPathInside(catosRoot, workspacePath)) {
+    throw new Error("workspacePath must not be inside the CatOS repository root.");
+  }
+  if (isPathInside(repositoryPath, workspacePath)) {
+    throw new Error("workspacePath must not be inside the target repository checkout.");
+  }
+  try {
+    await stat(workspacePath);
+    throw new Error("workspacePath already exists and may belong to another active worktree for this run.");
+  } catch (error) {
+    const systemError = error as NodeJS.ErrnoException;
+    if (systemError.code !== "ENOENT") throw error;
+  }
+
+  return workspacePath;
 }
 
 export function buildCodexInstruction(instruction: string): string {
@@ -176,10 +226,12 @@ async function defaultGit(args: string[], cwd?: string): Promise<GitResult> {
 export class CodexSdkWorker implements CodingWorker {
   private readonly git: (args: string[], cwd?: string) => Promise<GitResult>;
   private readonly codexFactory?: () => CodexClient;
+  private readonly catosRoot?: string;
 
   constructor(options: CodexSdkWorkerOptions = {}) {
     this.git = options.git ?? defaultGit;
     this.codexFactory = options.codexFactory;
+    this.catosRoot = options.catosRoot;
   }
 
   async executeTask(input: CodingTask): Promise<CodingResult> {
@@ -188,8 +240,8 @@ export class CodexSdkWorker implements CodingWorker {
     await this.git(["rev-parse", "--verify", `${input.baseBranch}^{commit}`], repositoryPath);
 
     const branchName = normalizeWorkBranchName(input.runId);
-    const workspacePath = path.join(input.runDir, "workspace");
-    await mkdir(input.runDir, { recursive: true });
+    const workspacePath = await buildIsolatedWorkspacePath({ workspaceRoot: input.workspaceRoot, runId: input.runId, repositoryPath, catosRoot: this.catosRoot });
+    await mkdir(path.dirname(workspacePath), { recursive: true });
     await this.git(["branch", branchName, input.baseBranch], repositoryPath);
     await this.git(["worktree", "add", workspacePath, branchName], repositoryPath);
 

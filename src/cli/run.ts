@@ -4,6 +4,7 @@ import { createRun } from "../runs/createRun.js";
 import { CodexSdkWorker, writeCodingArtifacts, type CodingWorker } from "../codingWorker.js";
 import { ShellValidationRunner, buildValidationCommands, writeValidationReport, type ValidationRunner } from "../validationRunner.js";
 import { reviewChange, writeReviewReport, type ReviewerProvider } from "../agents/reviewer.js";
+import { resolveWorkspaceRoot } from "../workspaceRoot.js";
 
 type RunCliOptions = {
   cwd?: string;
@@ -42,13 +43,14 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
   const run = await createRun(projectId, goal, configPath, { runsDir: options.runsDir });
   const analysis = await analyzeTaskBrief(goal, projectId, { provider: options.taskAnalystProvider });
   const taskBriefPath = await writeTaskBrief(run.runDir, analysis.taskBrief);
+  const workspaceRoot = resolveWorkspaceRoot(loaded.config.execution.workspaceRoot);
   const codingWorker = options.codingWorker ?? new CodexSdkWorker();
   const codingResult = await codingWorker.executeTask({
     instruction: analysis.taskBrief.codexInstruction,
     repositoryPath: loaded.absoluteRepoPath,
     baseBranch: loaded.config.project.baseBranch,
     runId: run.runId,
-    runDir: run.runDir,
+    workspaceRoot,
     sandboxMode: loaded.config.codex.sandboxMode,
   });
   const codingArtifacts = await writeCodingArtifacts(run.runDir, analysis.taskBrief, codingResult);

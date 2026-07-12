@@ -1,6 +1,9 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 export type ValidationCommand = {
   name: string;
@@ -30,6 +33,46 @@ export type ValidationReport = {
   finishedAt: string;
   results: ValidationCommandResult[];
 };
+
+function isPathInside(parent: string, child: string): boolean {
+  const relative = path.relative(parent, child);
+  return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function blockedPreflightResult(message: string): ValidationCommandResult {
+  return {
+    name: "preflight",
+    command: "validation workspace isolation preflight",
+    required: true,
+    status: "BLOCKED",
+    exitCode: null,
+    signal: null,
+    stdout: "",
+    stderr: message,
+    durationMs: 0,
+    timedOut: false,
+  };
+}
+
+async function validationPreflight(workspacePath: string, catosRoot: string): Promise<ValidationCommandResult | undefined> {
+  try {
+    const workspaceStats = await stat(workspacePath);
+    if (!workspaceStats.isDirectory()) return blockedPreflightResult(`Workspace is not a directory: ${workspacePath}`);
+    const [realWorkspacePath, realCatosRoot] = await Promise.all([realpath(workspacePath), realpath(catosRoot)]);
+    if (isPathInside(realCatosRoot, realWorkspacePath)) {
+      return blockedPreflightResult(`Validation workspace must not be inside CatOS repository root: ${realWorkspacePath}`);
+    }
+    const { stdout } = await execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd: realWorkspacePath, encoding: "utf8" });
+    const gitTopLevel = await realpath(stdout.trim());
+    if (gitTopLevel !== realWorkspacePath) {
+      return blockedPreflightResult(`Validation workspace Git top-level mismatch: expected ${realWorkspacePath}, got ${gitTopLevel}`);
+    }
+  } catch (error) {
+    const err = error as Error & { stderr?: string; stdout?: string };
+    return blockedPreflightResult([err.message, err.stderr, err.stdout].filter(Boolean).join("\n"));
+  }
+  return undefined;
+}
 
 export interface ValidationRunner {
   run(input: { workspacePath: string; commands: ValidationCommand[] }): Promise<ValidationReport>;
@@ -180,10 +223,22 @@ async function runOneCommand(workspacePath: string, command: ValidationCommand):
 }
 
 export class ShellValidationRunner implements ValidationRunner {
+  private readonly catosRoot: string;
+
+  constructor(options: { catosRoot?: string } = {}) {
+    this.catosRoot = path.resolve(options.catosRoot ?? process.cwd());
+  }
+
   async run(input: { workspacePath: string; commands: ValidationCommand[] }): Promise<ValidationReport> {
     const workspacePath = path.resolve(input.workspacePath);
     const startedAt = new Date().toISOString();
     const results: ValidationCommandResult[] = [];
+
+    const preflightFailure = await validationPreflight(workspacePath, this.catosRoot);
+    if (preflightFailure) {
+      const finishedAt = new Date().toISOString();
+      return { schemaVersion: 1, status: "BLOCKED", workspacePath, startedAt, finishedAt, results: [preflightFailure] };
+    }
 
     for (const command of input.commands) {
       results.push(await runOneCommand(workspacePath, command));
