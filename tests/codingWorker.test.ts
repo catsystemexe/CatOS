@@ -77,10 +77,12 @@ describe("CodexSdkWorker", () => {
     const runDir = path.join(runsRoot, "run-1");
     let receivedInstruction = "";
     let receivedWorkspace = "";
+    let receivedSandboxMode = "";
     const worker = new CodexSdkWorker({
       codexFactory: () => ({
-        startThread: ({ workingDirectory }) => {
+        startThread: ({ workingDirectory, sandboxMode }) => {
           receivedWorkspace = workingDirectory;
+          receivedSandboxMode = sandboxMode ?? "";
           return {
             id: "thread-local",
             run: async (instruction: string) => {
@@ -100,6 +102,7 @@ describe("CodexSdkWorker", () => {
     expect(receivedInstruction).toContain("Change README");
     expect(receivedInstruction).toContain("Do not create commits, push, merge, or rebase.");
     expect(receivedWorkspace).toBe(path.join(runDir, "workspace"));
+    expect(receivedSandboxMode).toBe("workspace-write");
     expect(result.workspacePath).toBe(receivedWorkspace);
     expect(result.threadId).toBe("thread-local");
     expect(result.changedFiles).toEqual(["README.md", "bin file.dat", "new file.txt"]);

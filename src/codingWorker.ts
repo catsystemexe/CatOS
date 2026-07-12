@@ -41,7 +41,7 @@ type CodexThread = {
 };
 
 type CodexClient = {
-  startThread(options: { workingDirectory: string; model?: string }): CodexThread;
+  startThread(options: { workingDirectory: string; sandboxMode?: "read-only" | "workspace-write" | "danger-full-access"; model?: string }): CodexThread;
 };
 
 type CodexConstructor = new () => CodexClient;
@@ -191,6 +191,7 @@ export class CodexSdkWorker implements CodingWorker {
     const codex = factory();
     const thread = codex.startThread({
       workingDirectory: workspacePath,
+      sandboxMode: "workspace-write",
       ...(process.env.CATOS_CODEX_MODEL ? { model: process.env.CATOS_CODEX_MODEL } : {}),
     });
     const turn = await thread.run(buildCodexInstruction(input.instruction));
