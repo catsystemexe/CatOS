@@ -162,6 +162,61 @@ describe("CodexSdkWorker", () => {
     expect(result.sandboxIsolation).toBe("disabled");
   });
 
+  it("continues an existing Codex thread for rework in the same workspace", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "catos-rework-workspace-"));
+    await git(["init", "-b", "main"], workspace);
+    await git(["config", "user.email", "catos@example.test"], workspace);
+    await git(["config", "user.name", "CatOS Test"], workspace);
+    await writeFile(path.join(workspace, "README.md"), "before\n", "utf8");
+    await git(["add", "README.md"], workspace);
+    await git(["commit", "-m", "initial"], workspace);
+    let resumedThreadId = "";
+    let resumedWorkspace = "";
+    let instruction = "";
+    const worker = new CodexSdkWorker({
+      codexFactory: () => ({
+        startThread: () => { throw new Error("must not start a new thread"); },
+        resumeThread: (threadId, { workingDirectory }) => {
+          resumedThreadId = threadId;
+          resumedWorkspace = workingDirectory;
+          return {
+            id: threadId,
+            run: async (inputInstruction: string) => {
+              instruction = inputInstruction;
+              await writeFile(path.join(workingDirectory, "README.md"), "after rework\n", "utf8");
+              return { finalResponse: "reworked" };
+            },
+          };
+        },
+      }),
+    });
+
+    const result = await worker.continueTask({
+      threadId: "thread-existing",
+      workspacePath: workspace,
+      sandboxMode: "workspace-write",
+      reworkPackage: {
+        schemaVersion: 1,
+        attempt: 1,
+        originalObjective: "Fix README",
+        acceptanceCriteria: ["README is fixed"],
+        blockingFindings: [{ id: "b1", title: "README not fixed", evidence: "before", requiredChange: "Write after rework" }],
+        preserve: ["Keep unrelated files"],
+        mustChange: ["Write after rework"],
+        mustNotChange: ["Do not commit"],
+        previousAttemptSummary: "Initial attempt missed README.",
+      },
+    });
+
+    expect(resumedThreadId).toBe("thread-existing");
+    expect(resumedWorkspace).toBe(workspace);
+    expect(instruction).toContain("Rework attempt: 1");
+    expect(instruction).toContain("Required change: Write after rework");
+    expect(result.threadId).toBe("thread-existing");
+    expect(result.workspacePath).toBe(workspace);
+    expect(result.diff).toContain("after rework");
+  });
+
   it("keeps the fake Codex workingDirectory scoped to the run workspace", async () => {
     const repo = await createRepo("main");
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "catos-worker-cwd-workspaces-"));
