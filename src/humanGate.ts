@@ -58,7 +58,7 @@ export class FileHumanGate implements HumanGate {
 
     await ensureFile(path.join(input.runDir, "task-brief.json"), "task brief");
     await ensureFile(resolveRunArtifact(input.runDir, input.finalResult.finalDiffPath, "workspace.diff"), "final diff");
-    await ensureFile(resolveRunArtifact(input.runDir, input.finalResult.finalValidationReportPath, "validation report"), "final validation report");
+    await ensureFile(resolveRunArtifact(input.runDir, input.finalResult.finalValidationReportPath, "validation-report.json"), "final validation report");
     await ensureFile(resolveRunArtifact(input.runDir, input.finalResult.finalReviewReportPath, "review-report.json"), "final review report");
 
     const decision = humanDecisionSchema.parse({
