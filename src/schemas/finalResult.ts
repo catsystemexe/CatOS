@@ -11,6 +11,8 @@ export const finalResultSchema = z.object({
   finalChangedFiles: z.array(z.string()),
   finalValidationStatus: z.enum(["PASS", "FAIL", "BLOCKED"]),
   finalReviewReportPath: z.string().min(1),
+  finalDiffPath: z.string().min(1).optional(),
+  finalValidationReportPath: z.string().min(1).optional(),
 });
 
 export type FinalResult = z.infer<typeof finalResultSchema>;

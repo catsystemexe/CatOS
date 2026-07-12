@@ -110,7 +110,7 @@ Reviewer používá vlastní verdikty:
 
 Důležité rozdělení: Validation Runner vrací statusy `PASS`, `FAIL`, `BLOCKED`, zatímco Reviewer vrací verdikty `ACCEPT`, `REWORK`, `HUMAN_REQUIRED`. Reviewer nikdy nevrací `FAIL`. Pokud je validation status `FAIL` nebo `BLOCKED`, CatOS deterministicky zakazuje verdict `ACCEPT` a nevalidní výstup odmítne. Pokud review package překročí jednoduchý MVP limit velikosti, CatOS kontext tiše nezkracuje a vrátí `HUMAN_REQUIRED`.
 
-Model Reviewera lze volitelně přepsat přes `CATOS_REVIEWER_MODEL`; výchozí model navazuje na výchozí nastavení Task Analysta. Reviewer může vrátit `REWORK`; Coordinator poté deterministicky sestaví verzovaný `ReworkPackage` z TaskBriefu, review nálezů, validace a aktuálního diffu. Reviewer neurčuje strukturu smyčky. Pokud `REWORK` neobsahuje blocking findings, CatOS běh ukončí jako `HUMAN_REQUIRED`. Tato etapa zatím neobsahuje Human Gate, commit vytvořený CatOS, push ani GitHub automatizaci.
+Model Reviewera lze volitelně přepsat přes `CATOS_REVIEWER_MODEL`; výchozí model navazuje na výchozí nastavení Task Analysta. Reviewer může vrátit `REWORK`; Coordinator poté deterministicky sestaví verzovaný `ReworkPackage` z TaskBriefu, review nálezů, validace a aktuálního diffu. Reviewer neurčuje strukturu smyčky. Pokud `REWORK` neobsahuje blocking findings, CatOS běh ukončí jako `HUMAN_REQUIRED`. Po dokončení Reviewer/Rework loopu vzniká `final-result.json` a další rozhodnutí přebírá deterministický Human Gate. Reviewer ani Human Gate nevytváří commit, push ani GitHub automatizaci.
 
 ## Rework loop
 
@@ -139,6 +139,59 @@ Po každém reworku CatOS znovu získá aktuální diff, spustí Validation Runn
 
 Každý běh ukládá konečný artefakt `runs/<runId>/final-result.json` se stavem, počtem coding pokusů, počtem reworků, finálním workspace, finálními změněnými soubory, finálním validation statusem a cestou k finálnímu review reportu. CLI vypisuje finální stav, počet coding pokusů a cestu k tomuto souboru.
 
+## Human Gate
+
+Po dokončení Reviewer/Rework loopu CatOS uloží `runs/<runId>/final-result.json`. Na tento auditní bod navazuje deterministický Human Gate, který není agent, nepoužívá LLM a nespouští Codex. V této etapě slouží pouze k jednorázovému záznamu lidského rozhodnutí do:
+
+- `runs/<runId>/human-decision.json`
+
+Human Gate nemění cílový worktree, nevytváří commit, nepushuje, nemerguje a nevytváří pull request. Existující `human-decision.json` se nikdy tiše nepřepisuje; druhé rozhodnutí nad stejným runem CLI odmítne.
+
+Podporovaná rozhodnutí jsou přesně:
+
+- `APPROVE` – člověk schvaluje změnu pro budoucí Commit Worker; commit se zatím nevytváří.
+- `REJECT` – člověk změnu odmítá a workflow končí bez další automatické práce.
+- `REQUEST_CHANGES` – člověk ukládá konkrétní požadované úpravy; automatický Codex rework se zatím nespouští.
+
+CLI příkaz pro záznam rozhodnutí:
+
+```bash
+npm run catos -- decide \
+  --run <runId> \
+  --decision approve
+```
+
+Hodnoty `--decision` jsou `approve`, `reject` a `request-changes`. Komentář lze přidat přes `--comment`. Požadované změny se zadávají opakovatelným argumentem `--change`:
+
+```bash
+npm run catos -- decide \
+  --run <runId> \
+  --decision request-changes \
+  --change "Zachovej původní API kompatibilitu." \
+  --change "Doplň regresní test."
+```
+
+Schválení vyžaduje explicitní potvrzení všech klíčových důkazů:
+
+```bash
+npm run catos -- decide \
+  --run <runId> \
+  --decision approve \
+  --reviewed task-brief \
+  --reviewed diff \
+  --reviewed validation \
+  --reviewed review \
+  --comment "Diff a validace zkontrolovány."
+```
+
+Pravidla Human Gate:
+
+- `APPROVE` je bez override povoleno pouze pro `final-result.json` se stavem `ACCEPTED`.
+- `APPROVE` vyžaduje potvrzení `task-brief`, `diff`, `validation` a `review`.
+- `REQUEST_CHANGES` vyžaduje alespoň jeden `--change`.
+- `REJECT` může, ale nemusí obsahovat komentář.
+- Příkaz `decide` ověřuje existenci `task-brief.json`, finálního diffu, finálního validation reportu a finálního review reportu. Pro finální artefakty používá cesty z `final-result.json`, pokud jsou dostupné.
+
 ## TaskBrief
 
 Task Analyst vrací strukturovaný výstup přibližně ve tvaru:
@@ -157,7 +210,7 @@ Testy používají injected provider, takže nevyžadují skutečné API volán�
 
 ## Co tato verze ještě neumí
 
-Tato verze záměrně neobsahuje Human Gate, event log, databázi, Temporal, LangGraph ani GitHub automatizaci. Také zatím neumí:
+Tato verze záměrně neobsahuje event log, databázi, Temporal, LangGraph ani GitHub automatizaci. Také zatím neumí:
 
 - automaticky opravovat chyby mimo ohraničený `REWORK` loop,
 - vytvářet Git commity v cílovém projektu,
