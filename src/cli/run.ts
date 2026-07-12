@@ -5,6 +5,8 @@ import { CodexSdkWorker, writeCodingArtifacts, type CodingWorker } from "../codi
 import { ShellValidationRunner, buildValidationCommands, writeValidationReport, type ValidationRunner } from "../validationRunner.js";
 import { reviewChange, writeReviewReport, type ReviewerProvider } from "../agents/reviewer.js";
 import { resolveWorkspaceRoot } from "../workspaceRoot.js";
+import { buildReworkPackage, hasRepeatedBlockingFinding, writeFinalResult, writeReworkPackage } from "../reworkLoop.js";
+import type { FinalResult } from "../schemas/finalResult.js";
 
 type RunCliOptions = {
   cwd?: string;
@@ -45,7 +47,11 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
   const taskBriefPath = await writeTaskBrief(run.runDir, analysis.taskBrief);
   const workspaceRoot = resolveWorkspaceRoot(loaded.config.execution.workspaceRoot);
   const codingWorker = options.codingWorker ?? new CodexSdkWorker();
-  const codingResult = await codingWorker.executeTask({
+  const validationRunner = options.validationRunner ?? new ShellValidationRunner();
+  const validationCommands = buildValidationCommands(loaded.config.commands, loaded.config.validation);
+  const maxReworkAttempts = loaded.config.workflow.maxReworkAttempts;
+
+  let codingResult = await codingWorker.executeTask({
     instruction: analysis.taskBrief.codexInstruction,
     repositoryPath: loaded.absoluteRepoPath,
     baseBranch: loaded.config.project.baseBranch,
@@ -54,13 +60,9 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
     sandboxMode: loaded.config.codex.sandboxMode,
   });
   const codingArtifacts = await writeCodingArtifacts(run.runDir, analysis.taskBrief, codingResult);
-  const validationRunner = options.validationRunner ?? new ShellValidationRunner();
-  const validationReport = await validationRunner.run({
-    workspacePath: codingResult.workspacePath,
-    commands: buildValidationCommands(loaded.config.commands, loaded.config.validation),
-  });
-  const validationReportPath = await writeValidationReport(run.runDir, validationReport);
-  const reviewReport = await reviewChange({
+  let validationReport = await validationRunner.run({ workspacePath: codingResult.workspacePath, commands: validationCommands });
+  let validationReportPath = await writeValidationReport(run.runDir, validationReport);
+  let reviewReport = await reviewChange({
     taskInput: run.input,
     taskBrief: analysis.taskBrief,
     codingResult: {
@@ -80,7 +82,108 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
       codex: loaded.config.codex,
     },
   }, { provider: options.reviewerProvider });
-  const reviewReportPath = await writeReviewReport(run.runDir, reviewReport);
+  let reviewReportPath = await writeReviewReport(run.runDir, reviewReport);
+
+  const initialCodingResult = codingResult;
+  const initialCodingArtifacts = codingArtifacts;
+  const initialValidationReport = validationReport;
+  const initialValidationReportPath = validationReportPath;
+  const initialReviewReport = reviewReport;
+  const initialReviewReportPath = reviewReportPath;
+  console.log(`Review verdict: ${reviewReport.verdict}`);
+
+  let previousReviewReport = reviewReport;
+  let previousValidationStatus = validationReport.status;
+  let reworkAttempts = 0;
+  let forcedHumanRequired = false;
+
+  while (reviewReport.verdict === "REWORK" && reworkAttempts < maxReworkAttempts && !forcedHumanRequired) {
+    if (reviewReport.blockingFindings.length === 0) {
+      forcedHumanRequired = true;
+      break;
+    }
+    if (reworkAttempts > 0 && hasRepeatedBlockingFinding(previousReviewReport, reviewReport)) {
+      forcedHumanRequired = true;
+      break;
+    }
+    if (reworkAttempts > 0 && previousValidationStatus === "BLOCKED" && validationReport.status === "BLOCKED") {
+      forcedHumanRequired = true;
+      break;
+    }
+
+    const attempt = reworkAttempts + 1;
+    console.log(`Starting rework attempt ${attempt}/${maxReworkAttempts}`);
+    const attemptDir = path.join(run.runDir, "attempts", String(attempt).padStart(2, "0"));
+    const reworkPackage = buildReworkPackage({
+      attempt,
+      taskBrief: analysis.taskBrief,
+      reviewReport,
+      codingResult,
+      validationReport,
+      workspaceDiff: codingResult.diff,
+    });
+    await writeReworkPackage(attemptDir, reworkPackage);
+    const beforeReview = reviewReport;
+    const beforeValidationStatus = validationReport.status;
+    codingResult = await codingWorker.continueTask({
+      threadId: codingResult.threadId,
+      workspacePath: codingResult.workspacePath,
+      reworkPackage,
+      sandboxMode: loaded.config.codex.sandboxMode,
+    });
+    await writeCodingArtifacts(attemptDir, analysis.taskBrief, codingResult);
+    validationReport = await validationRunner.run({ workspacePath: codingResult.workspacePath, commands: validationCommands });
+    validationReportPath = await writeValidationReport(attemptDir, validationReport);
+    reviewReport = await reviewChange({
+      taskInput: run.input,
+      taskBrief: analysis.taskBrief,
+      codingResult: {
+        threadId: codingResult.threadId,
+        finalResponse: codingResult.finalResponse,
+        workspacePath: codingResult.workspacePath,
+        changedFiles: codingResult.changedFiles,
+        sandboxMode: codingResult.sandboxMode,
+        sandboxIsolation: codingResult.sandboxIsolation,
+      },
+      workspaceDiff: codingResult.diff,
+      workspaceStatus: codingResult.status,
+      validationReport,
+      projectConstraints: {
+        permissions: loaded.config.permissions,
+        workflow: loaded.config.workflow,
+        codex: loaded.config.codex,
+      },
+    }, { provider: options.reviewerProvider });
+    reviewReportPath = await writeReviewReport(attemptDir, reviewReport);
+    console.log(`Rework validation: ${validationReport.status}`);
+    console.log(`Rework review verdict: ${reviewReport.verdict}`);
+    reworkAttempts = attempt;
+    previousReviewReport = beforeReview;
+    previousValidationStatus = beforeValidationStatus;
+  }
+
+  let finalStatus: FinalResult["status"];
+  if (forcedHumanRequired || reviewReport.verdict === "HUMAN_REQUIRED") {
+    finalStatus = "HUMAN_REQUIRED";
+  } else if (reviewReport.verdict === "ACCEPT") {
+    finalStatus = "ACCEPTED";
+  } else {
+    finalStatus = "REWORK_LIMIT_REACHED";
+  }
+  const finalResult: FinalResult = {
+    schemaVersion: 1,
+    runId: run.runId,
+    status: finalStatus,
+    finalReviewVerdict: reviewReport.verdict,
+    totalCodingAttempts: 1 + reworkAttempts,
+    reworkAttempts,
+    finalWorkspacePath: codingResult.workspacePath,
+    finalChangedFiles: codingResult.changedFiles,
+    finalValidationStatus: validationReport.status,
+    finalReviewReportPath: reviewReportPath,
+  };
+  const finalResultPath = await writeFinalResult(run.runDir, finalResult);
+
 
   console.log("CatOS run created");
   console.log(`Run ID: ${run.runId}`);
@@ -88,23 +191,26 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
   console.log(`Repository: ${loaded.absoluteRepoPath}`);
   console.log(`Input: ${run.inputPath}`);
   console.log(`Task brief: ${taskBriefPath}`);
-  console.log(`Workspace: ${codingResult.workspacePath}`);
-  console.log(`Codex sandbox mode: ${codingResult.sandboxMode} (isolation: ${codingResult.sandboxIsolation})`);
-  console.log(`Changed files: ${codingResult.changedFiles.length}`);
-  if (codingResult.changedFiles.length === 0) {
+  console.log(`Workspace: ${initialCodingResult.workspacePath}`);
+  console.log(`Codex sandbox mode: ${initialCodingResult.sandboxMode} (isolation: ${initialCodingResult.sandboxIsolation})`);
+  console.log(`Changed files: ${initialCodingResult.changedFiles.length}`);
+  if (initialCodingResult.changedFiles.length === 0) {
     console.log("Codex Worker completed without file changes.");
   }
-  console.log(`Diff: ${codingArtifacts.diffPath}`);
-  console.log(`Codex thread ID: ${codingResult.threadId}`);
+  console.log(`Diff: ${initialCodingArtifacts.diffPath}`);
+  console.log(`Codex thread ID: ${initialCodingResult.threadId}`);
   console.log(`Task Analyst attempts: ${analysis.attempts}`);
-  console.log(`Validation: ${validationReport.status}`);
-  for (const result of validationReport.results) {
+  console.log(`Validation: ${initialValidationReport.status}`);
+  for (const result of initialValidationReport.results) {
     const exit = result.exitCode === null ? "null" : String(result.exitCode);
     console.log(`- ${result.name}: ${result.status} (exit ${exit}, ${(result.durationMs / 1000).toFixed(1)}s)`);
   }
-  console.log(`Validation report: ${validationReportPath}`);
-  console.log(`Review verdict: ${reviewReport.verdict}`);
-  console.log(`Review blocking findings: ${reviewReport.blockingFindings.length}`);
-  console.log(`Review warnings: ${reviewReport.warnings.length}`);
-  console.log(`Review report: ${reviewReportPath}`);
+  console.log(`Validation report: ${initialValidationReportPath}`);
+  console.log(`Review verdict: ${initialReviewReport.verdict}`);
+  console.log(`Review blocking findings: ${initialReviewReport.blockingFindings.length}`);
+  console.log(`Review warnings: ${initialReviewReport.warnings.length}`);
+  console.log(`Review report: ${initialReviewReportPath}`);
+  console.log(`Final status: ${finalResult.status}`);
+  console.log(`Total coding attempts: ${finalResult.totalCodingAttempts}`);
+  console.log(`Final result: ${finalResultPath}`);
 }

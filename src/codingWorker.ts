@@ -1,4 +1,5 @@
 import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
+import type { ReworkPackage } from "./schemas/reworkPackage.js";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -17,6 +18,13 @@ export type CodingTask = {
   sandboxMode?: SandboxMode;
 };
 
+export type ReworkCodingTask = {
+  threadId: string;
+  workspacePath: string;
+  reworkPackage: ReworkPackage;
+  sandboxMode?: SandboxMode;
+};
+
 export type CodingResult = {
   threadId: string;
   finalResponse: string;
@@ -30,6 +38,7 @@ export type CodingResult = {
 
 export interface CodingWorker {
   executeTask(input: CodingTask): Promise<CodingResult>;
+  continueTask(input: ReworkCodingTask): Promise<CodingResult>;
 }
 
 type GitResult = { stdout: string; stderr: string };
@@ -48,6 +57,8 @@ type CodexThread = {
 
 type CodexClient = {
   startThread(options: { workingDirectory: string; sandboxMode?: SandboxMode; model?: string }): CodexThread;
+  resumeThread?: (threadId: string, options: { workingDirectory: string; sandboxMode?: SandboxMode; model?: string }) => CodexThread;
+  continueThread?: (threadId: string, options: { workingDirectory: string; sandboxMode?: SandboxMode; model?: string }) => CodexThread;
 };
 
 type CodexConstructor = new () => CodexClient;
@@ -139,6 +150,45 @@ export function buildCodexInstruction(instruction: string): string {
     "",
     "TaskBrief.codexInstruction:",
     instruction,
+  ].join("\n");
+}
+
+
+export function buildReworkCodexInstruction(reworkPackage: ReworkPackage): string {
+  return [
+    "You are continuing the same CatOS Codex Worker thread for a bounded rework attempt.",
+    "",
+    "Safety rules:",
+    "- Continue working in the same Git worktree workspace already provided to this thread.",
+    "- Modify only files inside that workspace.",
+    "- Do not change files outside the workspace.",
+    "- Do not create commits, push, merge, or rebase.",
+    "- Do not add secrets, credentials, API keys, tokens, or private data.",
+    "- Make only the specific required changes below and preserve already satisfied behavior.",
+    "",
+    `Rework attempt: ${reworkPackage.attempt}`,
+    `Original objective: ${reworkPackage.originalObjective}`,
+    "",
+    "Acceptance criteria:",
+    ...reworkPackage.acceptanceCriteria.map((criterion) => `- ${criterion}`),
+    "",
+    "Blocking findings to fix:",
+    ...reworkPackage.blockingFindings.map((finding) => [
+      `- ${finding.id}: ${finding.title}`,
+      `  Evidence: ${finding.evidence}`,
+      `  Required change: ${finding.requiredChange}`,
+    ].join("\n")),
+    "",
+    "Must change:",
+    ...reworkPackage.mustChange.map((item) => `- ${item}`),
+    "",
+    "Preserve:",
+    ...(reworkPackage.preserve.length > 0 ? reworkPackage.preserve.map((item) => `- ${item}`) : ["- Preserve all behavior unrelated to the blocking findings."]),
+    "",
+    "Must not change:",
+    ...(reworkPackage.mustNotChange.length > 0 ? reworkPackage.mustNotChange.map((item) => `- ${item}`) : ["- Do not expand scope beyond the original TaskBrief."]),
+    "",
+    `Previous attempt summary: ${reworkPackage.previousAttemptSummary}`,
   ].join("\n");
 }
 
@@ -234,6 +284,23 @@ export class CodexSdkWorker implements CodingWorker {
     this.catosRoot = options.catosRoot;
   }
 
+  private async collectResult(input: { threadId: string; finalResponse: string; workspacePath: string; sandboxMode: SandboxMode; sandboxIsolation: SandboxIsolation }): Promise<CodingResult> {
+    const statusOutput = await this.git(["status", "--porcelain=v1", "-z"], input.workspacePath);
+    const changedFileEntries = parseStatusPorcelainZ(statusOutput.stdout);
+    const diff = await buildWorkspaceDiff(input.workspacePath, changedFileEntries, this.git);
+    const humanStatusOutput = await this.git(["status", "--short"], input.workspacePath);
+    return {
+      threadId: input.threadId,
+      finalResponse: input.finalResponse,
+      workspacePath: input.workspacePath,
+      changedFiles: changedFileEntries.map((entry) => entry.path),
+      diff,
+      status: humanStatusOutput.stdout,
+      sandboxMode: input.sandboxMode,
+      sandboxIsolation: input.sandboxIsolation,
+    };
+  }
+
   async executeTask(input: CodingTask): Promise<CodingResult> {
     const repositoryPath = path.resolve(input.repositoryPath);
     await this.git(["rev-parse", "--is-inside-work-tree"], repositoryPath);
@@ -264,25 +331,44 @@ export class CodexSdkWorker implements CodingWorker {
     });
     const turn = await thread.run(buildCodexInstruction(input.instruction));
 
-    const statusOutput = await this.git(["status", "--porcelain=v1", "-z"], workspacePath);
-    const changedFileEntries = parseStatusPorcelainZ(statusOutput.stdout);
-    const diff = await buildWorkspaceDiff(workspacePath, changedFileEntries, this.git);
-    const humanStatusOutput = await this.git(["status", "--short"], workspacePath);
-
-    return {
+    return await this.collectResult({
       threadId: thread.id ?? thread.threadId ?? "unknown",
       finalResponse: stringifyCodexTurn(turn),
       workspacePath,
-      changedFiles: changedFileEntries.map((entry) => entry.path),
-      diff,
-      status: humanStatusOutput.stdout,
       sandboxMode,
       sandboxIsolation,
+    });
+  }
+
+  async continueTask(input: ReworkCodingTask): Promise<CodingResult> {
+    const workspacePath = path.resolve(input.workspacePath);
+    const sandboxMode = input.sandboxMode ?? "workspace-write";
+    const sandboxIsolation = sandboxMode === "danger-full-access" ? "disabled" : "enabled";
+    const factory = this.codexFactory ?? (await loadDefaultCodexFactory());
+    const codex = factory();
+    const options = {
+      workingDirectory: workspacePath,
+      sandboxMode,
+      ...(process.env.CATOS_CODEX_MODEL ? { model: process.env.CATOS_CODEX_MODEL } : {}),
     };
+    const resume = codex.resumeThread ?? codex.continueThread;
+    if (!resume) {
+      throw new Error("Codex SDK client does not expose resumeThread/continueThread for rework continuation.");
+    }
+    const thread = resume.call(codex, input.threadId, options);
+    const turn = await thread.run(buildReworkCodexInstruction(input.reworkPackage));
+    return await this.collectResult({
+      threadId: thread.id ?? thread.threadId ?? input.threadId,
+      finalResponse: stringifyCodexTurn(turn),
+      workspacePath,
+      sandboxMode,
+      sandboxIsolation,
+    });
   }
 }
 
 export async function writeCodingArtifacts(runDir: string, taskBrief: unknown, result: CodingResult): Promise<{ codingResultPath: string; diffPath: string; statusPath: string; taskBriefPath: string }> {
+  await mkdir(runDir, { recursive: true });
   const taskBriefPath = path.join(runDir, "task-brief.json");
   const codingResultPath = path.join(runDir, "coding-result.json");
   const diffPath = path.join(runDir, "workspace.diff");

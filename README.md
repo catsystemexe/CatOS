@@ -4,7 +4,7 @@ CatOS je připravovaná CLI aplikace pro řízení bezpečné a auditovatelné a
 
 ## Aktuální stav MVP
 
-Aktuální verze implementuje infrastrukturní kostru z první fáze MVP, první analytický krok, první verzi Codex Workeru, Validation Runner a první verzi Reviewer agenta:
+Aktuální verze implementuje infrastrukturní kostru z první fáze MVP, první analytický krok, první verzi Codex Workeru, Validation Runner a první verzi Reviewer agenta a ohraničený rework loop:
 
 - CLI příkaz `run`,
 - načtení projektové konfigurace z YAML souboru,
@@ -24,7 +24,11 @@ Aktuální verze implementuje infrastrukturní kostru z první fáze MVP, první
 - deterministické spuštění Validation Runneru nad izolovaným worktree,
 - uložení strukturovaného validačního reportu do `validation-report.json`,
 - spuštění Reviewer agenta bez shellu a bez filesystem tools nad omezeným review package,
-- uložení strukturovaného review verdiktu do `review-report.json`.
+- uložení strukturovaného review verdiktu do `review-report.json`,
+- automatické pokračování při `ReviewReport.verdict === "REWORK"` nejvýše do `workflow.maxReworkAttempts`,
+- pokračování reworku ve stejném Codex threadu a stejném externím worktree,
+- uložení artefaktů každého rework pokusu do vlastního `attempts/NN/` adresáře,
+- uložení konečného verdiktu do `final-result.json`.
 
 ## Požadavky
 
@@ -61,7 +65,7 @@ Worker nepouští push, merge ani automatický commit. Po dokončení Codexu Cat
 - `runs/<runId>/workspace.diff` – celý pracovní diff,
 - `runs/<runId>/workspace-status.txt` – Git status worktree.
 
-Model Codexu není připnutý natvrdo. Pokud je potřeba override, lze nastavit `CATOS_CODEX_MODEL`; jinak se použije výchozí chování SDK. Tato etapa zatím neobsahuje rework loop, commit vytvořený CatOS, push ani merge.
+Model Codexu není připnutý natvrdo. Pokud je potřeba override, lze nastavit `CATOS_CODEX_MODEL`; jinak se použije výchozí chování SDK. Rework pokusy, pokud je spustí Coordinator po verdiktu `REWORK`, pokračují přes resume/continue mechanismus Codex SDK ve stejném threadu a stejném worktree. Worker ani během reworku nepouští push, merge ani automatický commit.
 
 ## Validation Runner
 
@@ -101,12 +105,39 @@ Reviewer ukládá validovaný strukturovaný artefakt:
 Reviewer používá vlastní verdikty:
 
 - `ACCEPT` – změna podle dostupných důkazů splňuje zadání.
-- `REWORK` – změna potřebuje opravu, ale zatím se automaticky nespouští další Codex iterace.
+- `REWORK` – změna potřebuje opravu a Coordinator může spustit ohraničený Codex rework loop podle `workflow.maxReworkAttempts`.
 - `HUMAN_REQUIRED` – automatické posouzení nestačí nebo je potřeba lidské rozhodnutí.
 
 Důležité rozdělení: Validation Runner vrací statusy `PASS`, `FAIL`, `BLOCKED`, zatímco Reviewer vrací verdikty `ACCEPT`, `REWORK`, `HUMAN_REQUIRED`. Reviewer nikdy nevrací `FAIL`. Pokud je validation status `FAIL` nebo `BLOCKED`, CatOS deterministicky zakazuje verdict `ACCEPT` a nevalidní výstup odmítne. Pokud review package překročí jednoduchý MVP limit velikosti, CatOS kontext tiše nezkracuje a vrátí `HUMAN_REQUIRED`.
 
-Model Reviewera lze volitelně přepsat přes `CATOS_REVIEWER_MODEL`; výchozí model navazuje na výchozí nastavení Task Analysta. Tato etapa zatím neobsahuje rework loop, Human Gate, commit vytvořený CatOS, push ani GitHub automatizaci.
+Model Reviewera lze volitelně přepsat přes `CATOS_REVIEWER_MODEL`; výchozí model navazuje na výchozí nastavení Task Analysta. Reviewer může vrátit `REWORK`; Coordinator poté deterministicky sestaví verzovaný `ReworkPackage` z TaskBriefu, review nálezů, validace a aktuálního diffu. Reviewer neurčuje strukturu smyčky. Pokud `REWORK` neobsahuje blocking findings, CatOS běh ukončí jako `HUMAN_REQUIRED`. Tato etapa zatím neobsahuje Human Gate, commit vytvořený CatOS, push ani GitHub automatizaci.
+
+## Rework loop
+
+Po prvním review CatOS spouští rework pouze tehdy, když `review.verdict === "REWORK"`. Verdikty `ACCEPT` a `HUMAN_REQUIRED` smyčku okamžitě ukončí. Limit automatických oprav se bere výhradně z konfigurace:
+
+```yaml
+workflow:
+  maxReworkAttempts: 2
+```
+
+Pro každý rework CatOS vytvoří strukturovaný `ReworkPackage` se schématem verze 1. Balíček obsahuje původní cíl, acceptance criteria, blocking findings, přesné `requiredChange`, položky k zachování, non-goals jako `mustNotChange` a shrnutí předchozího pokusu. Codex dostává konkrétní auditovatelnou instrukci, že pokračuje ve stejném worktree, nesmí commitovat, pushovat ani mergovat a nesmí pracovat mimo workspace.
+
+Artefakty prvního pokusu zůstávají kvůli kompatibilitě v rootu `runs/<runId>/`: `coding-result.json`, `workspace.diff`, `workspace-status.txt`, `validation-report.json` a `review-report.json`. Každý rework pokus má vlastní auditní stopu:
+
+```text
+runs/<runId>/attempts/01/
+  rework-package.json
+  coding-result.json
+  workspace.diff
+  workspace-status.txt
+  validation-report.json
+  review-report.json
+```
+
+Po každém reworku CatOS znovu získá aktuální diff, spustí Validation Runner a Reviewer. Pokud Reviewer vrátí `ACCEPT`, finální stav je `ACCEPTED`. Pokud vrátí `HUMAN_REQUIRED`, finální stav je `HUMAN_REQUIRED`. Pokud po vyčerpání limitu zůstane `REWORK`, finální stav je `REWORK_LIMIT_REACHED`. Stejný blocking finding ve dvou po sobě jdoucích review ukončí automatické opravy jako `HUMAN_REQUIRED`; stejně tak opakovaný `BLOCKED` validation stav nesmí způsobit nekonečné opakování.
+
+Každý běh ukládá konečný artefakt `runs/<runId>/final-result.json` se stavem, počtem coding pokusů, počtem reworků, finálním workspace, finálními změněnými soubory, finálním validation statusem a cestou k finálnímu review reportu. CLI vypisuje finální stav, počet coding pokusů a cestu k tomuto souboru.
 
 ## TaskBrief
 
@@ -126,9 +157,9 @@ Testy používají injected provider, takže nevyžadují skutečné API volán�
 
 ## Co tato verze ještě neumí
 
-Tato verze záměrně neobsahuje rework loop, Human Gate, event log, databázi, Temporal, LangGraph ani GitHub automatizaci. Také zatím neumí:
+Tato verze záměrně neobsahuje Human Gate, event log, databázi, Temporal, LangGraph ani GitHub automatizaci. Také zatím neumí:
 
-- automaticky opravovat validační nebo review chyby,
+- automaticky opravovat chyby mimo ohraničený `REWORK` loop,
 - vytvářet Git commity v cílovém projektu,
 - pushovat nebo mergovat změny,
 - ukládat stav do databáze,
