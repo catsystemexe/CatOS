@@ -20,7 +20,9 @@ Aktuální verze implementuje infrastrukturní kostru z první fáze MVP, první
 - deterministické spuštění Codex Workeru nad `TaskBrief.codexInstruction`,
 - přípravu izolovaného Git worktree v `runs/<runId>/workspace/`,
 - získání změněných souborů, pracovního diffu a Git statusu přes Git,
-- uložení coding artefaktů do `coding-result.json`, `workspace.diff` a `workspace-status.txt`.
+- uložení coding artefaktů do `coding-result.json`, `workspace.diff` a `workspace-status.txt`,
+- deterministické spuštění Validation Runneru nad izolovaným worktree,
+- uložení strukturovaného validačního reportu do `validation-report.json`.
 
 ## Požadavky
 
@@ -45,7 +47,7 @@ Součástí repozitáře je demonstrační konfigurace `projects/demo.yaml`, kte
 OPENAI_API_KEY=... npm run catos -- run --project demo --task "Testovací úkol"
 ```
 
-Při úspěchu příkaz vypíše ID běhu, načtený projekt, ověřenou cestu k cílovému repozitáři, cestu k vytvořenému `input.json`, cestu k `task-brief.json`, cestu k izolovanému worktree, počet změněných souborů, cestu k diffu a Codex thread ID.
+Při úspěchu příkaz vypíše ID běhu, načtený projekt, ověřenou cestu k cílovému repozitáři, cestu k vytvořenému `input.json`, cestu k `task-brief.json`, cestu k izolovanému worktree, počet změněných souborů, cestu k diffu, Codex thread ID, celkový validation status, výsledek každého validačního příkazu a cestu k `validation-report.json`.
 
 ## Codex Worker
 
@@ -58,6 +60,31 @@ Worker nepouští push, merge ani automatický commit. Po dokončení Codexu Cat
 - `runs/<runId>/workspace-status.txt` – Git status worktree.
 
 Model Codexu není připnutý natvrdo. Pokud je potřeba override, lze nastavit `CATOS_CODEX_MODEL`; jinak se použije výchozí chování SDK. Tato etapa zatím neobsahuje automatickou validaci, Reviewer, rework loop, commit vytvořený CatOS, push ani merge.
+
+## Validation Runner
+
+Po dokončení Codex Workeru CatOS automaticky spustí deterministický Validation Runner. Nejde o LLM agenta: běžný TypeScript kód přečte validační příkazy z projektové konfigurace, spustí je s `cwd` nastaveným na izolovaný worktree a uloží přesný strukturovaný výsledek do `runs/<runId>/validation-report.json`. CatOS tím nevěří textovému tvrzení Codexu o úspěchu.
+
+Pro MVP zůstává podporovaný stávající tvar konfigurace:
+
+```yaml
+commands:
+  typecheck: npm run typecheck
+  test: npm run test
+  build: npm run build
+validation:
+  timeoutMs: 120000
+```
+
+Příkazy jsou povinné a běží sekvenčně v pořadí `typecheck`, `test`, `build`. Výchozí timeout je 120 sekund na příkaz. Runner po selhání jednoho příkazu pokračuje dalšími příkazy, aby report obsahoval kompletní obraz.
+
+Stavy mají tento význam:
+
+- `PASS` – příkaz byl spuštěn, neskončil timeoutem a vrátil exit code `0`.
+- `FAIL` – příkaz byl spuštěn a vrátil nenulový exit code.
+- `BLOCKED` – příkaz nešlo korektně spustit nebo dokončit, například kvůli nenalezenému executable, timeoutu nebo interní chybě runneru.
+
+Celkový stav reportu se počítá deterministicky podle závažnosti `BLOCKED > FAIL > PASS` pouze z povinných příkazů. Tato etapa zatím neobsahuje Reviewer, rework loop ani automatickou opravu validačních chyb.
 
 ## TaskBrief
 
@@ -79,7 +106,7 @@ Testy používají injected provider, takže nevyžadují skutečné API volán�
 
 Tato verze záměrně neobsahuje Reviewer, rework loop, event log, databázi, Temporal, LangGraph ani GitHub automatizaci. Také zatím neumí:
 
-- spouštět validační příkazy cílového projektu,
+- spouštět Reviewer nebo automaticky opravovat validační chyby,
 - vytvářet Git commity v cílovém projektu,
 - pushovat nebo mergovat změny,
 - ukládat stav do databáze,

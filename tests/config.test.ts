@@ -41,6 +41,7 @@ describe("loadProjectConfig", () => {
     expect(loaded.absoluteRepoPath).toBe(path.join(root, "repo"));
     expect(loaded.config.codex.sandboxMode).toBe("workspace-write");
     expect(loaded.config.codex.acknowledgeNoSandbox).toBe(false);
+    expect(loaded.config.validation.timeoutMs).toBe(120_000);
   });
 
   it("rejects danger-full-access without explicit acknowledgement", async () => {

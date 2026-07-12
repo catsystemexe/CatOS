@@ -2,12 +2,14 @@ import { analyzeTaskBrief, writeTaskBrief, type TaskAnalystProvider } from "../a
 import { loadProjectConfig } from "../config/loadConfig.js";
 import { createRun } from "../runs/createRun.js";
 import { CodexSdkWorker, writeCodingArtifacts, type CodingWorker } from "../codingWorker.js";
+import { ShellValidationRunner, buildValidationCommands, writeValidationReport, type ValidationRunner } from "../validationRunner.js";
 
 type RunCliOptions = {
   cwd?: string;
   runsDir?: string;
   taskAnalystProvider?: TaskAnalystProvider;
   codingWorker?: CodingWorker;
+  validationRunner?: ValidationRunner;
 };
 
 function readOption(args: string[], name: string): string | undefined {
@@ -48,6 +50,12 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
     sandboxMode: loaded.config.codex.sandboxMode,
   });
   const codingArtifacts = await writeCodingArtifacts(run.runDir, analysis.taskBrief, codingResult);
+  const validationRunner = options.validationRunner ?? new ShellValidationRunner();
+  const validationReport = await validationRunner.run({
+    workspacePath: codingResult.workspacePath,
+    commands: buildValidationCommands(loaded.config.commands, loaded.config.validation),
+  });
+  const validationReportPath = await writeValidationReport(run.runDir, validationReport);
 
   console.log("CatOS run created");
   console.log(`Run ID: ${run.runId}`);
@@ -64,4 +72,10 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
   console.log(`Diff: ${codingArtifacts.diffPath}`);
   console.log(`Codex thread ID: ${codingResult.threadId}`);
   console.log(`Task Analyst attempts: ${analysis.attempts}`);
+  console.log(`Validation: ${validationReport.status}`);
+  for (const result of validationReport.results) {
+    const exit = result.exitCode === null ? "null" : String(result.exitCode);
+    console.log(`- ${result.name}: ${result.status} (exit ${exit}, ${(result.durationMs / 1000).toFixed(1)}s)`);
+  }
+  console.log(`Report: ${validationReportPath}`);
 }

@@ -17,3 +17,5 @@ permissions:
 codex:
   sandboxMode: danger-full-access
   acknowledgeNoSandbox: true
+validation:
+  timeoutMs: 120000

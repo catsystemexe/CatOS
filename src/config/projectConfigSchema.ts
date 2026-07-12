@@ -27,6 +27,9 @@ export const projectConfigSchema = z.object({
     sandboxMode: sandboxModeSchema.default("workspace-write"),
     acknowledgeNoSandbox: z.boolean().optional().default(false),
   }).default({ sandboxMode: "workspace-write", acknowledgeNoSandbox: false }),
+  validation: z.object({
+    timeoutMs: z.number().int().positive().default(120_000),
+  }).default({ timeoutMs: 120_000 }),
 }).superRefine((config, ctx) => {
   if (config.codex.sandboxMode === "danger-full-access" && !config.codex.acknowledgeNoSandbox) {
     ctx.addIssue({
