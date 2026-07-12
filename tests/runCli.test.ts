@@ -31,7 +31,7 @@ describe("runCommand", () => {
     const calls: string[] = [];
     const codingWorker: CodingWorker = {
       executeTask: async (input) => {
-        calls.push(input.instruction);
+        calls.push(`${input.instruction}|${input.sandboxMode}`);
         return {
           threadId: "thread-cli",
           finalResponse: "fake worker done",
@@ -39,6 +39,8 @@ describe("runCommand", () => {
           changedFiles: ["README.md"],
           diff: "diff --git a/README.md b/README.md\n",
           status: " M README.md\n",
+          sandboxMode: input.sandboxMode ?? "workspace-write",
+          sandboxIsolation: input.sandboxMode === "danger-full-access" ? "disabled" : "enabled",
         };
       },
     };
@@ -49,9 +51,11 @@ describe("runCommand", () => {
     expect(runDirs).toHaveLength(1);
     const taskBrief = JSON.parse(await readFile(path.join(runsDir, runDirs[0]!, "task-brief.json"), "utf8"));
     expect(taskBriefSchema.parse(taskBrief)).toEqual(brief);
-    expect(calls).toEqual([brief.codexInstruction]);
+    expect(calls).toEqual([`${brief.codexInstruction}|workspace-write`]);
     const codingResult = JSON.parse(await readFile(path.join(runsDir, runDirs[0]!, "coding-result.json"), "utf8"));
     expect(codingResult.changedFiles).toEqual(["README.md"]);
+    expect(codingResult.sandboxMode).toBe("workspace-write");
+    expect(codingResult.sandboxIsolation).toBe("enabled");
     await expect(readFile(path.join(runsDir, runDirs[0]!, "workspace.diff"), "utf8")).resolves.toContain("diff --git");
     await expect(readFile(path.join(runsDir, runDirs[0]!, "workspace-status.txt"), "utf8")).resolves.toContain("README.md");
   });

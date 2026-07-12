@@ -45,6 +45,7 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
     baseBranch: loaded.config.project.baseBranch,
     runId: run.runId,
     runDir: run.runDir,
+    sandboxMode: loaded.config.codex.sandboxMode,
   });
   const codingArtifacts = await writeCodingArtifacts(run.runDir, analysis.taskBrief, codingResult);
 
@@ -55,6 +56,7 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
   console.log(`Input: ${run.inputPath}`);
   console.log(`Task brief: ${taskBriefPath}`);
   console.log(`Workspace: ${codingResult.workspacePath}`);
+  console.log(`Codex sandbox mode: ${codingResult.sandboxMode} (isolation: ${codingResult.sandboxIsolation})`);
   console.log(`Changed files: ${codingResult.changedFiles.length}`);
   if (codingResult.changedFiles.length === 0) {
     console.log("Codex Worker completed without file changes.");

@@ -34,6 +34,8 @@ describe("writeCodingArtifacts", () => {
       changedFiles: ["src/a.ts", "README.md"],
       diff: "diff --git a/README.md b/README.md\n",
       status: " M README.md\n",
+      sandboxMode: "danger-full-access",
+      sandboxIsolation: "disabled",
     };
 
     const artifacts = await writeCodingArtifacts(runDir, { codexInstruction: "Do it" }, result);
@@ -45,6 +47,8 @@ describe("writeCodingArtifacts", () => {
       workspacePath: result.workspacePath,
       changedFiles: ["src/a.ts", "README.md"],
       finalResponse: "done",
+      sandboxMode: "danger-full-access",
+      sandboxIsolation: "disabled",
     });
     await expect(readFile(artifacts.diffPath, "utf8")).resolves.toBe(result.diff);
     await expect(readFile(artifacts.statusPath, "utf8")).resolves.toBe(result.status);
@@ -112,7 +116,56 @@ describe("CodexSdkWorker", () => {
     expect(result.diff).toContain("bin file.dat");
     expect(result.diff).toContain("GIT binary patch");
     expect(result.status).toContain("README.md");
+    expect(result.sandboxMode).toBe("workspace-write");
+    expect(result.sandboxIsolation).toBe("enabled");
     await expect(readFile(path.join(repo, "README.md"), "utf8")).resolves.toBe("before\n");
     await expect(git(["status", "--short"], repo)).resolves.toBe("");
+  });
+
+  it("passes danger-full-access to the SDK only when explicitly requested and records disabled isolation", async () => {
+    const repo = await createRepo("main");
+    const runsRoot = await mkdtemp(path.join(os.tmpdir(), "catos-worker-danger-"));
+    const runDir = path.join(runsRoot, "run-1");
+    let receivedSandboxMode = "";
+    const worker = new CodexSdkWorker({
+      codexFactory: () => ({
+        startThread: ({ workingDirectory, sandboxMode }) => {
+          receivedSandboxMode = sandboxMode ?? "";
+          return {
+            id: "thread-danger",
+            run: async () => {
+              await writeFile(path.join(workingDirectory, "README.md"), "danger mode edit\n", "utf8");
+              return { finalResponse: "changed files" };
+            },
+          };
+        },
+      }),
+    });
+
+    const result = await worker.executeTask({ instruction: "Change README", repositoryPath: repo, baseBranch: "main", runId: "danger", runDir, sandboxMode: "danger-full-access" });
+
+    expect(receivedSandboxMode).toBe("danger-full-access");
+    expect(result.sandboxMode).toBe("danger-full-access");
+    expect(result.sandboxIsolation).toBe("disabled");
+  });
+
+  it("keeps the fake Codex workingDirectory scoped to the run workspace", async () => {
+    const repo = await createRepo("main");
+    const runsRoot = await mkdtemp(path.join(os.tmpdir(), "catos-worker-cwd-"));
+    const runDir = path.join(runsRoot, "run-1");
+    let receivedWorkspace = "";
+    const worker = new CodexSdkWorker({
+      codexFactory: () => ({
+        startThread: ({ workingDirectory }) => {
+          receivedWorkspace = workingDirectory;
+          return { id: "thread-cwd", run: async () => ({ finalResponse: "no changes" }) };
+        },
+      }),
+    });
+
+    const result = await worker.executeTask({ instruction: "Inspect only", repositoryPath: repo, baseBranch: "main", runId: "cwd", runDir });
+
+    expect(receivedWorkspace).toBe(path.join(runDir, "workspace"));
+    expect(result.workspacePath).toBe(receivedWorkspace);
   });
 });

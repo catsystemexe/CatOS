@@ -5,12 +5,16 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
+export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
+export type SandboxIsolation = "enabled" | "disabled";
+
 export type CodingTask = {
   instruction: string;
   repositoryPath: string;
   baseBranch: string;
   runId: string;
   runDir: string;
+  sandboxMode?: SandboxMode;
 };
 
 export type CodingResult = {
@@ -20,6 +24,8 @@ export type CodingResult = {
   changedFiles: string[];
   diff: string;
   status: string;
+  sandboxMode: SandboxMode;
+  sandboxIsolation: SandboxIsolation;
 };
 
 export interface CodingWorker {
@@ -41,7 +47,7 @@ type CodexThread = {
 };
 
 type CodexClient = {
-  startThread(options: { workingDirectory: string; sandboxMode?: "read-only" | "workspace-write" | "danger-full-access"; model?: string }): CodexThread;
+  startThread(options: { workingDirectory: string; sandboxMode?: SandboxMode; model?: string }): CodexThread;
 };
 
 type CodexConstructor = new () => CodexClient;
@@ -187,11 +193,21 @@ export class CodexSdkWorker implements CodingWorker {
     await this.git(["branch", branchName, input.baseBranch], repositoryPath);
     await this.git(["worktree", "add", workspacePath, branchName], repositoryPath);
 
+    const sandboxMode = input.sandboxMode ?? "workspace-write";
+    const sandboxIsolation = sandboxMode === "danger-full-access" ? "disabled" : "enabled";
+    if (sandboxMode === "danger-full-access") {
+      console.warn([
+        "⚠️  WARNING: Codex sandbox isolation is DISABLED.",
+        "CatOS is running Codex with sandboxMode=danger-full-access because it was explicitly configured and acknowledged.",
+        "Use this compatibility mode only in trusted repositories without sensitive data.",
+      ].join("\n"));
+    }
+
     const factory = this.codexFactory ?? (await loadDefaultCodexFactory());
     const codex = factory();
     const thread = codex.startThread({
       workingDirectory: workspacePath,
-      sandboxMode: "workspace-write",
+      sandboxMode,
       ...(process.env.CATOS_CODEX_MODEL ? { model: process.env.CATOS_CODEX_MODEL } : {}),
     });
     const turn = await thread.run(buildCodexInstruction(input.instruction));
@@ -208,6 +224,8 @@ export class CodexSdkWorker implements CodingWorker {
       changedFiles: changedFileEntries.map((entry) => entry.path),
       diff,
       status: humanStatusOutput.stdout,
+      sandboxMode,
+      sandboxIsolation,
     };
   }
 }
@@ -224,6 +242,8 @@ export async function writeCodingArtifacts(runDir: string, taskBrief: unknown, r
     workspacePath: result.workspacePath,
     changedFiles: result.changedFiles,
     finalResponse: result.finalResponse,
+    sandboxMode: result.sandboxMode,
+    sandboxIsolation: result.sandboxIsolation,
   }, null, 2)}\n`, "utf8");
   await writeFile(diffPath, result.diff, "utf8");
   await writeFile(statusPath, result.status, "utf8");
