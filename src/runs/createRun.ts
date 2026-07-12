@@ -31,6 +31,7 @@ export async function createRun(projectId: string, goal: string, configPath: str
     configPath,
   };
 
+  await mkdir(runsDir, { recursive: true });
   await mkdir(runDir, { recursive: false });
   await writeFile(inputPath, `${JSON.stringify(input, null, 2)}\n`, "utf8");
 

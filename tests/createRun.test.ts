@@ -14,6 +14,27 @@ describe("createRun", () => {
     expect((await stat(run.runDir)).isDirectory()).toBe(true);
   });
 
+  it("creates a missing root runs directory before creating the run directory", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "catos-missing-root-"));
+    const runsDir = path.join(cwd, "runs");
+
+    const run = await createRun("demo", "Testovací úkol", "projects/demo.yaml", { runsDir, runId: "first-run" });
+
+    expect((await stat(runsDir)).isDirectory()).toBe(true);
+    expect((await stat(run.runDir)).isDirectory()).toBe(true);
+    expect(run.runDir).toBe(path.join(runsDir, "first-run"));
+  });
+
+  it("fails instead of overwriting an existing run directory for the same runId", async () => {
+    const runsDir = await mkdtemp(path.join(os.tmpdir(), "catos-collision-"));
+
+    await createRun("demo", "První úkol", "projects/demo.yaml", { runsDir, runId: "same-run" });
+
+    await expect(createRun("demo", "Druhý úkol", "projects/demo.yaml", { runsDir, runId: "same-run" })).rejects.toMatchObject({
+      code: "EEXIST",
+    });
+  });
+
   it("writes input.json with valid content", async () => {
     const runsDir = await mkdtemp(path.join(os.tmpdir(), "catos-input-"));
     const now = new Date("2026-07-12T12:00:00.000Z");

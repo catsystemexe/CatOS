@@ -1,223 +1,150 @@
-# ChatGPT handoff – 2026-07-12 Task Analyst Agent
+# ChatGPT handoff – 2026-07-12 createRun runsDir fix
 
 ## 1. Session metadata
 
 - **Datum:** 2026-07-12
-- **Aktuální branch:** `work` (uživatelské zadání zmiňovalo `main`, ale lokální checkout byl během celé session na `work`)
-- **Výchozí commit:** `97612aa chore: lock dependencies after MVP validation`
-- **Výsledný commit:** HEAD commit obsahující tento handoff (`git log -1 --oneline`)
-- **Cíl session:** implementovat pouze další krok roadmapy: Task Analyst Agent převádějící lidské zadání na strukturovaný `TaskBrief`.
-- **Stav pracovního stromu:** před commitem obsahoval zamýšlené změny k Task Analystovi, `.env.example`, testy a handoff dokumentaci.
+- **Aktuální branch:** `work` (uživatel požadoval práci nad aktuálním stavem `main`, ale v repozitáři je dostupný a checkoutnutý pouze lokální branch `work`.)
+- **Výchozí commit:** `537c1c8 open ai package`
+- **Výsledný commit:** HEAD commit této session (`git log -1 --oneline`)
+- **Cíl session:** opravit runtime chybu `ENOENT` při vytváření běhu, pokud caller předá dosud neexistující kořenový `runsDir`; doplnit regresní testy; zkontrolovat stav dočasné deklarace OpenAI Agents SDK; nepřidávat nové MVP funkce.
+- **Stav pracovního stromu:** před commitem obsahuje pouze změny související s opravou `createRun`, testy a aktualizací handoffu, plus odstranění již nepotřebné dočasné SDK deklarace.
 
 ## 2. Executive summary
 
-Cílem bylo přidat OpenAI Agents SDK pouze v rozsahu nutném pro Task Analysta, bez Codex Workera, Reviewera, rework loopu, event logu, databáze, Temporal, LangGraph nebo GitHub automatizace.
+Cílem bylo odstranit konkrétní runtime chybu v `createRun()`, kdy `mkdir(runDir, { recursive: false })` selhal s `ENOENT`, pokud ještě neexistoval rodičovský adresář `runsDir`. Implementováno je dvoukrokové vytváření adresářů: nejprve se zajistí existence kořenového `runsDir` s `recursive: true`, poté se konkrétní `runDir` vytvoří s `recursive: false`.
 
-Implementováno je Zod schema `TaskBrief`, Task Analyst provider rozhraní, reálný OpenAI Agents SDK provider bez nástrojů, nejvýše jedna opravná iterace při nevalidním výstupu a zápis výsledku do `runs/<runId>/task-brief.json`. CLI `run` po dosavadním vytvoření `input.json` nově spustí analýzu a vypíše cestu k task briefu. Testy používají injected fake provider, takže nemají volat OpenAI API.
+Tím zůstává zachováno požadované chování při kolizi stejného `runId`: druhý pokus o vytvoření stejného `runDir` nadále selže na `EEXIST`, takže existující běh ani `input.json` nejsou přepsány. Nebyl přidán Codex Worker, Reviewer, event log, rework loop ani žádná jiná nová funkce mimo rozsah této opravy.
 
-Skutečné runtime ověření není dokončené. `npm install @openai/agents` v prostředí selhalo na registry 403. Následné `npm run typecheck`, `npm run test` a `npm run build` byly spuštěny, ale selhaly kvůli chybějícím lokálním dependencies (`node_modules` nebyl dostupný), nikoli kvůli ověřené implementační chybě v kódu. Skutečné OpenAI API volání nebylo provedeno a není vydáváno za ověřené.
+Doplněny jsou regresní testy pro vytvoření chybějícího kořenového `runsDir`, vytvoření konkrétního adresáře běhu a selhání při opakovaném použití stejného `runId`. Požadované validační příkazy byly spuštěny, ale v tomto kontejneru nejsou plně ověřitelné: `npm install` narazil na package firewall (`403` pro `zod-4.4.3.tgz`) a dostupný runtime je Node `v20.20.2`, zatímco projekt vyžaduje Node `>=22`. Proto `typecheck` a `build` selhaly kvůli chybějícím typovým balíčkům a `test` selhal kvůli chybějícímu `vitest` bináru, ne kvůli novému selhání testovací logiky.
 
 ## 3. Aktuální architektura dotčené části
 
-Skutečný tok CLI po změně:
+Tok dotčeného CLI běhu zůstává stejný:
 
 CLI
 → `runCommand(args)`
-→ načtení `projects/<projectId>.yaml`
-→ Zod validace configu
+→ načtení a validace projektového configu
 → kontrola `repoPath`
-→ `createRun(...)`
-→ zápis `runs/<runId>/input.json`
-→ `analyzeTaskBrief(...)`
-→ OpenAI Agents SDK provider nebo injected fake provider
-→ Zod validace `TaskBrief`
-→ případně jedna opravná iterace
-→ zápis `runs/<runId>/task-brief.json`
-→ terminálový výstup
+→ `createRun(projectId, goal, configPath, options)`
+→ zajištění `runsDir`
+→ vytvoření unikátního `runDir`
+→ zápis `input.json`
+→ Task Analyst provider
+→ zápis `task-brief.json`
 
-Hlavní moduly:
-
-- `src/cli/run.ts`: orchestrace současného CLI běhu; zůstává deterministická aplikační logika, není agent.
-- `src/agents/taskAnalyst.ts`: hranice mezi CatOS a Task Analyst providerem; obsahuje retry/validaci a zápis briefu.
-- `src/schemas/taskBrief.ts`: datový kontrakt pro výstup Task Analysta.
-- `src/openai-agents.d.ts`: minimální lokální typová deklarace pro compile-time práci při nedostupném balíčku v sandboxu.
-- `tests/taskAnalyst.test.ts` a `tests/runCli.test.ts`: fake-provider testy bez API volání.
+Dotčený modul `src/runs/createRun.ts` zůstává malou deterministickou utilitou. Neřeší agentní orchestrace, validace projektu ani review; pouze připravuje adresář jednoho běhu a zapisuje reprodukovatelný `TaskInput`.
 
 ## 4. Veřejná rozhraní a datové kontrakty
 
-### `TaskBrief`
+### `createRun`
 
-Soubor: `src/schemas/taskBrief.ts`
-
-```ts
-export const taskBriefSchema = z.object({
-  objective: z.string().trim().min(1),
-  acceptanceCriteria: z.array(z.string().trim().min(1)).min(1),
-  nonGoals: z.array(z.string().trim().min(1)),
-  codexInstruction: z.string().trim().min(1),
-  riskLevel: z.enum(["trivial", "standard", "critical"]),
-});
-```
-
-Účel: strukturovaný a validovatelný výstup Task Analysta. Oproti zadání nebyla přidána žádná nová pole; validační podmínky pouze zakazují prázdné zásadní texty a vyžadují alespoň jedno akceptační kritérium.
-
-### `TaskAnalystProvider`
-
-Soubor: `src/agents/taskAnalyst.ts`
+Soubor: `src/runs/createRun.ts`
 
 ```ts
-export type TaskAnalystProvider = {
-  analyze(input: TaskAnalystProviderInput): Promise<unknown>;
-};
-```
-
-Účel: umožnit injected fake provider v testech a oddělit retry/validaci od reálného OpenAI volání.
-
-### `analyzeTaskBrief`
-
-Soubor: `src/agents/taskAnalyst.ts`
-
-```ts
-export async function analyzeTaskBrief(
-  goal: string,
+export async function createRun(
   projectId: string,
-  options: AnalyzeTaskOptions = {},
-): Promise<AnalyzeTaskResult>
+  goal: string,
+  configPath: string,
+  options: CreateRunOptions = {},
+): Promise<CreateRunResult>
 ```
 
-Účel: získat `TaskBrief`, validovat jej přes Zod a při prvním nevalidním výstupu provést nejvýše jednu opravnou iteraci.
-
-### `writeTaskBrief`
-
-Soubor: `src/agents/taskAnalyst.ts`
+Účel se nezměnil: vytvořit nový běh, vrátit `runId`, `runDir`, `inputPath` a zapsaný `TaskInput`. Změněná validační/IO vlastnost je pouze pořadí vytváření adresářů:
 
 ```ts
-export async function writeTaskBrief(runDir: string, taskBrief: TaskBrief): Promise<string>
+await mkdir(runsDir, { recursive: true });
+await mkdir(runDir, { recursive: false });
 ```
 
-Účel: zapsat `runs/<runId>/task-brief.json`.
+První řádek dovoluje neexistující kořenový adresář běhů. Druhý řádek záměrně není rekurzivní, aby kolize stejného `runId` selhala a nepřepsala existující run.
 
 ## 5. Změny podle souborů
 
-`package.json`
+`src/runs/createRun.ts`
 
-- Přidává `@openai/agents` jako runtime dependency a aktualizuje `zod` na v4 řadu, kterou vyžaduje oficiální Agents SDK dokumentace.
-- Riziko: package-lock nemohl být plně regenerován kvůli registry 403 v prostředí.
+- Přidává explicitní vytvoření `runsDir` pomocí `mkdir(runsDir, { recursive: true })` před vytvořením konkrétního `runDir`.
+- Zachovává `mkdir(runDir, { recursive: false })`, aby druhý pokus se stejným `runId` skončil chybou `EEXIST`.
+- Nemění tvar `TaskInput`, generování `runId`, cestu `input.json` ani zápis JSON.
 
-`package-lock.json`
+`tests/createRun.test.ts`
 
-- Root dependency metadata bylo upraveno tak, aby odpovídalo záměru `package.json`.
-- Omezení: chybí ověřená regenerace lockfile z npm registry.
+- Přidává test, který předá `runsDir` v existujícím dočasném rodiči, ale samotný `runsDir` předem nevytvoří.
+- Ověřuje, že vznikne kořenový `runsDir`, konkrétní `runDir` a že `run.runDir` odpovídá očekávané cestě `path.join(runsDir, runId)`.
+- Přidává kolizní test, který vytvoří běh s fixním `runId` a druhý pokus se stejným `runId` očekává jako `EEXIST`.
+- Zachovává původní testy pro existenci run adresáře, validní `input.json` a unikátní generované `runId`.
 
-`.env.example`
+`src/openai-agents.d.ts.disabled`
 
-- Přidává vzor pro `OPENAI_API_KEY` a volitelný `CATOS_TASK_ANALYST_MODEL`.
-- Neobsahuje žádný secret.
+- Odstraněn jako dočasná lokální náhradní deklarace. Aktivní soubor `src/openai-agents.d.ts` už v checkoutu nebyl; v repozitáři byla pouze deaktivovaná varianta `.disabled`.
+- Cílem je neobnovovat lokální náhradní typy a používat skutečné typy `@openai/agents`, jakmile dependency instalace v prostředí projde.
 
-`src/schemas/taskBrief.ts`
+`docs/handoffs/CURRENT_CHATGPT_HANDOFF.md`
 
-- Nové Zod schema a TypeScript typ pro `TaskBrief`.
-
-`src/agents/taskAnalyst.ts`
-
-- Nová implementace Task Analyst flow.
-- Reálný provider dynamicky importuje `@openai/agents`, nastavuje API key z env a definuje agenta s `tools: []`.
-- Retry je explicitní a omezený na 2 pokusy celkem.
-
-`src/openai-agents.d.ts`
-
-- Minimální typová deklarace pro použitou část SDK. Slouží jako dočasná opora, dokud sandbox nedovolí instalaci balíčku.
-
-`src/cli/run.ts`
-
-- Zachovává dosavadní načtení configu a vytvoření runu.
-- Nově volá Task Analysta a zapisuje task brief.
-- Přidává `taskAnalystProvider` do testovacích optionů.
-
-`tests/taskAnalyst.test.ts`
-
-- Testuje validní brief, odmítnutí nevalidního výstupu, opravnou iteraci, selhání po druhém nevalidním výstupu a zápis `task-brief.json`.
-
-`tests/runCli.test.ts`
-
-- Ověřuje CLI tok s injected providerem bez API volání.
-
-`README.md`
-
-- Aktualizuje popis aktuálního MVP, požadavek na `OPENAI_API_KEY`, `TaskBrief` kontrakt a hranice toho, co zatím není součástí implementace.
+- Aktualizován podle šablony tak, aby popisoval skutečný stav po této malé opravě, včetně blokované validace.
 
 ## 6. Důležitá implementační rozhodnutí
 
-- **Injected provider místo mockování SDK:** Testy neimportují ani nevolají reálné OpenAI API. To drží jednotkové testy deterministické.
-- **Žádné nástroje pro Task Analysta:** Reálný `Agent` je vytvořen s `tools: []`; nepoužívá `SandboxAgent`, shell, apply patch ani filesystem tool.
-- **Dynamický import SDK:** `@openai/agents` se importuje až v reálném provideru. Fake-provider testy tedy mohou běžet bez API volání a bez importu SDK v testovací cestě.
-- **Jedna opravná iterace v CatOS kódu:** I když Agents SDK podporuje structured output, CatOS záměrně validuje finální hodnotu přes vlastní `taskBriefSchema.safeParse`, aby byl retry mechanismus testovatelný a explicitní.
-- **Bez předčasné orchestrace:** Nebyl přidán Codex Worker, Reviewer, rework loop, event log ani další durable workflow vrstva.
+- **Dvoukrokový `mkdir`:** Zvolen přesně požadovaný princip `mkdir(runsDir, { recursive: true })` následovaný `mkdir(runDir, { recursive: false })`. Alternativa `mkdir(runDir, { recursive: true })` byla odmítnuta, protože by zakryla kolize a mohla by umožnit pokračování nad existujícím runem.
+- **Kolize se testuje přes fixní `runId`:** Test nepředstírá náhodnou kolizi generátoru UUID; přímo používá veřejnou testovací option `runId`, což je deterministické.
+- **Žádná nová orchestrace:** Oprava se drží Etapy 1/2 aktuální implementace a nepřidává části pozdější roadmapy.
+- **Dočasné SDK typy se neobnovují:** Protože dependency `@openai/agents` je deklarovaná v `package.json`, správná další cesta je zprovoznit instalaci skutečných balíčků, nikoli vracet lokální `.d.ts` shim.
 
 ## 7. Validace a důkazy
 
 | Kontrola | Stav | Důkaz / překážka |
 |---|---:|---|
-| `npm install @openai/agents` | BLOCKED | Spuštěno; exit code 1; registry vrátilo `403 Forbidden - GET https://registry.npmjs.org/@openai%2fagents`. |
-| `npm run typecheck` | BLOCKED | Spuštěno; exit code 2; `Cannot find type definition file for 'node'` a `vitest/globals`, protože dependencies nejsou instalované. |
-| `npm run test` | BLOCKED | Spuštěno; exit code 127; `vitest: not found`, protože dependencies nejsou instalované. |
-| `npm run build` | BLOCKED | Spuštěno; exit code 2; stejné chybějící typové balíčky jako typecheck. |
-| Skutečné OpenAI API volání | NOT RUN | Neproběhlo; nebyl použit reálný API klíč a SDK balíček nebyl nainstalován v sandboxu. |
+| `npm install --no-audit --no-fund --ignore-scripts --fetch-retries=0` | BLOCKED | Spuštěno; exit code 1; package firewall vrátil `403 Forbidden - GET http://package-firewall.replit.local/npm/zod/-/zod-4.4.3.tgz`. |
+| `npm run typecheck` | FAIL | Spuštěno; exit code 2; `Cannot find type definition file for 'node'` a `vitest/globals`, protože dependencies nejsou kompletně nainstalované. |
+| `npm run test` | FAIL | Spuštěno; exit code 127; `vitest: not found`, protože dependencies nejsou kompletně nainstalované. |
+| `npm run build` | FAIL | Spuštěno; exit code 2; stejné chybějící typové balíčky jako typecheck. |
 
 ## 8. Git diff summary
 
-- Změněno/přidáno 11 souborů.
-- Hlavní změny: nový `TaskBrief` kontrakt, Task Analyst implementace, CLI integrace, fake-provider testy, `.env.example`, README a handoff dokumentace.
-- Nebyly přidány secrets.
-- Nebyly přidány generované run artefakty.
-- Lockfile nebyl plně regenerován kvůli registry bloku; commit proto obsahuje pouze root dependency metadata v lockfile.
-- Rozsah je zamýšleně omezený na Task Analyst krok.
+- Změněny 4 soubory: `src/runs/createRun.ts`, `tests/createRun.test.ts`, `docs/handoffs/CURRENT_CHATGPT_HANDOFF.md` a odstraněný `src/openai-agents.d.ts.disabled`.
+- Hlavní změna v diffu je jediný nový IO krok v `createRun()` před vytvořením konkrétního běhu.
+- Testovací diff přidává pouze regresní pokrytí nové cesty a kolizního chování.
+- Nebyly přidány generované run artefakty, lockfile změny ani nové dependencies.
+- Commit má obsahovat pouze zamýšlený rozsah opravy runtime chyby a handoff.
 
 ## 9. Rizika a podezřelá místa
 
-- Největší riziko je neověřená kompatibilita přesné verze `@openai/agents` se zvoleným importem `Agent`, `run` a `setDefaultOpenAIKey`. API bylo navrženo podle oficiálních dokumentů, ale balíček nebylo možné nainstalovat.
-- `package-lock.json` není plně obnovený. Před navázáním by mělo prostředí s přístupem k registry spustit `npm install` a lockfile korektně regenerovat.
-- Výchozí model je `gpt-5.5`; pokud nebude v daném OpenAI účtu dostupný, je připraven env override `CATOS_TASK_ANALYST_MODEL`.
-- CLI teď pro běžný reálný run vyžaduje `OPENAI_API_KEY`; to je záměr Task Analyst kroku, ale znamená to, že původní demo CLI bez klíče už nedokončí celý run.
-- Nebyla provedena end-to-end validace s reálným OpenAI API.
+- Lokálně nebylo možné plně prokázat průchod testů kvůli blokované instalaci dependencies a Node `v20.20.2` v kontejneru. V prostředí s Node `>=22` a funkčním npm registry je potřeba validaci zopakovat.
+- `npm install` během session nejprve částečně vytvořil `node_modules`, ale po selhání není spolehlivý; `node_modules` není součást commitu.
+- Odstranění `.disabled` shim souboru by nemělo ovlivnit kompilaci, protože soubor s touto příponou nebyl zahrnutý do `tsconfig`, ale odstraňuje historickou oporu pro ruční návrat k lokálním deklaracím.
+- Implementace předpokládá standardní Node chování `fs.mkdir` s `recursive: false`, tedy `EEXIST` při existujícím adresáři.
 
 ## 10. Otevřené úkoly
 
 ### Blokující před pokračováním
 
-- V prostředí s dostupnou registry spustit `npm install`, zkontrolovat a commitnout plně regenerovaný `package-lock.json`, pokud se změní.
-- Spustit `npm run typecheck`, `npm run test`, `npm run build` s nainstalovanými dependencies.
-- Provést alespoň jeden reálný CLI běh s `OPENAI_API_KEY` a jasně označit skutečný výsledek.
+- V prostředí s Node `>=22` a dostupným npm registry spustit `npm install` nebo `npm ci`.
+- Znovu spustit `npm run typecheck`, `npm run test`, `npm run build` a ověřit skutečný průchod proti nainstalovaným typům `@openai/agents`.
 
 ### Následující doporučený krok
 
-- Stabilizovat dependency instalaci a ověřit reálné OpenAI Agents SDK volání Task Analysta, ještě před přidáváním Codex Workera.
+- Po zprovoznění dependencies ověřit celý stávající Task Analyst CLI tok s injected providerem i skutečnými SDK typy, bez přidávání Codex Workera.
 
 ### Pozdější práce
 
 - Codex Worker.
 - Reviewer.
 - Rework loop.
-- Event log.
-- Databáze / Temporal / LangGraph.
-- GitHub automatizace.
+- Event log / audit běhu.
+- Human gate a commit/report workflow.
 
 ## 11. Otázky pro ChatGPT review
 
-1. Je `TaskBrief` schema dostatečně úzké pro první MVP krok?
-2. Má CLI vyžadovat Task Analyst vždy, nebo má mít dočasný explicitní `--skip-analysis` režim pro offline demo?
-3. Je dynamický import `@openai/agents` vhodný kompromis pro testovatelnost, nebo má být SDK provider oddělen do vlastního souboru?
-4. Je ruční limit dvou pokusů správně umístěný v CatOS kódu, nikoli v SDK error handleru?
-5. Má být default model pevně v kódu, nebo pouze přes env?
-6. Je dočasná lokální deklarace `src/openai-agents.d.ts` přijatelná do doby, než půjde dependency nainstalovat?
+1. Je dvoukrokové vytváření `runsDir` a `runDir` dostatečné pro všechny očekávané cesty Etapy 1?
+2. Má `createRun()` zachytávat a obalovat `EEXIST`, nebo je lepší ponechat nativní filesystem chybu pro caller/testy?
+3. Je vhodné držet `runId` jako option pro testy i do budoucna, nebo jej později přesunout za samostatný generátor?
+4. Má se po zprovoznění dependencies doplnit test, že při kolizi nevznikne změněný `input.json`?
+5. Má další session řešit pouze stabilizaci dependency instalace a SDK typů, než se začne s Codex Workerem?
 
 ## 12. Doporučené soubory k přímému review
 
-1. `src/agents/taskAnalyst.ts` – hlavní Task Analyst flow, provider a retry logika.
-2. `src/schemas/taskBrief.ts` – nový datový kontrakt.
-3. `src/cli/run.ts` – integrace do dosavadního CLI toku.
-4. `tests/taskAnalyst.test.ts` – pokrytí validace a retry chování.
-5. `tests/runCli.test.ts` – ověření zápisu briefu přes CLI s fake providerem.
-6. `package.json` – nové dependency a Zod v4.
-7. `.env.example` – deklarace očekávaných env proměnných bez secrets.
-8. `README.md` – veřejný popis aktuálního stavu a omezení.
+1. `src/runs/createRun.ts` – obsahuje vlastní opravu pořadí `mkdir` a zachování kolizního chování.
+2. `tests/createRun.test.ts` – obsahuje regresní test pro chybějící `runsDir` a test kolize `runId`.
+3. `tests/runCli.test.ts` – původní selhávající integrační test, který by nová oprava měla odblokovat.
+4. `src/cli/run.ts` – caller `createRun()` v CLI toku s injected Task Analyst providerem.
+5. `package.json` – deklaruje Node `>=22` a skutečnou dependency `@openai/agents`.
+6. `tsconfig.json` – ukazuje, proč chybějící `@types/node` a `vitest` blokují typecheck/build v neúplném prostředí.
