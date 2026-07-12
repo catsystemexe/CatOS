@@ -1,9 +1,11 @@
+import { analyzeTaskBrief, writeTaskBrief, type TaskAnalystProvider } from "../agents/taskAnalyst.js";
 import { loadProjectConfig } from "../config/loadConfig.js";
 import { createRun } from "../runs/createRun.js";
 
 type RunCliOptions = {
   cwd?: string;
   runsDir?: string;
+  taskAnalystProvider?: TaskAnalystProvider;
 };
 
 function readOption(args: string[], name: string): string | undefined {
@@ -32,10 +34,14 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
   }
 
   const run = await createRun(projectId, goal, configPath, { runsDir: options.runsDir });
+  const analysis = await analyzeTaskBrief(goal, projectId, { provider: options.taskAnalystProvider });
+  const taskBriefPath = await writeTaskBrief(run.runDir, analysis.taskBrief);
 
   console.log("CatOS run created");
   console.log(`Run ID: ${run.runId}`);
   console.log(`Project: ${loaded.config.project.id} (${loaded.config.project.name})`);
   console.log(`Repository: ${loaded.absoluteRepoPath}`);
   console.log(`Input: ${run.inputPath}`);
+  console.log(`Task brief: ${taskBriefPath}`);
+  console.log(`Task Analyst attempts: ${analysis.attempts}`);
 }
