@@ -153,6 +153,12 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
         workflow: loaded.config.workflow,
         codex: loaded.config.codex,
       },
+      reworkContext: {
+        reworkPackage,
+        previousBlockingFindings: reworkPackage.blockingFindings,
+        requiredChanges: reworkPackage.mustChange,
+        reworkReason: reworkPackage.previousAttemptSummary,
+      },
     }, { provider: options.reviewerProvider });
     reviewReportPath = await writeReviewReport(attemptDir, reviewReport);
     console.log(`Rework validation: ${validationReport.status}`);

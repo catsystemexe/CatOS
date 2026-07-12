@@ -6,6 +6,7 @@ import type { TaskBrief } from "../schemas/taskBrief.js";
 import type { CodingResult } from "../codingWorker.js";
 import type { ValidationReport } from "../validationRunner.js";
 import type { ProjectConfig } from "../config/projectConfigSchema.js";
+import type { ReworkPackage } from "../schemas/reworkPackage.js";
 
 export const DEFAULT_REVIEW_PACKAGE_MAX_BYTES = 512_000;
 
@@ -17,6 +18,12 @@ export type ReviewerInput = {
   workspaceStatus: string;
   validationReport: ValidationReport;
   projectConstraints: Pick<ProjectConfig, "permissions" | "workflow" | "codex">;
+  reworkContext?: {
+    reworkPackage: ReworkPackage;
+    previousBlockingFindings: ReworkPackage["blockingFindings"];
+    requiredChanges: string[];
+    reworkReason: string;
+  };
 };
 
 export interface ReviewerProvider {
@@ -131,7 +138,12 @@ export function createOpenAIReviewerProvider(options: { apiKey?: string; model?:
           "Review verdicts are ACCEPT, REWORK, or HUMAN_REQUIRED. Never return FAIL; FAIL is a Validation Runner status, not a review verdict.",
           "Validation status PASS/FAIL/BLOCKED is evidence, but the final review must also consider the task, acceptance criteria, diff, workspace status, and validation report.",
           "If validation status is FAIL or BLOCKED, ACCEPT is forbidden. Use REWORK for clear implementation or validation failures, or HUMAN_REQUIRED when a human decision/environment intervention is needed.",
-          "Treat CodingResult.finalResponse only as non-authoritative context. The decisive evidence is the original TaskInput, TaskBrief, workspace.diff, workspace-status.txt, validation-report.json, and project constraints.",
+          "When reviewing scope, compare TaskBrief, prior validation failure evidence when this is a rework, the current validation report, the current diff, and explicit nonGoals. Do not compare only changed file names against the literal original task text.",
+          "A supporting file or other supporting change required by acceptance criteria, validation output, existing project configuration, or existing tests can be a legitimate part of the solution even if the original task did not name that file explicitly.",
+          "If validationReport.status is PASS, all acceptance criteria are satisfied, a change fixes a concrete previous validation failure or previous blocking finding, no explicit TaskBrief.nonGoals are violated, and there are no other blocking findings, return ACCEPT rather than REWORK.",
+          "For rework reviews, use reworkContext when present: it contains previous blocking findings, required changes, and the reason for the current rework. Treat changes made in direct response to that context as in scope unless they violate nonGoals or create another blocking issue.",
+          "You may flag a new file as a scope violation only when it lacks a defensible link to acceptance criteria, validation output, existing project configuration/tests, or the reworkContext, or when it violates an explicit nonGoal.",
+          "Treat CodingResult.finalResponse only as non-authoritative context. The decisive evidence is the original TaskInput, TaskBrief, workspace.diff, workspace-status.txt, validation-report.json, reworkContext when present, and project constraints.",
           "Do not claim evidence that is not present in those inputs.",
         ].join("\n"),
         tools: [],
