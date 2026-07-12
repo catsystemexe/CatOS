@@ -10,6 +10,7 @@ import type { ValidationReport } from "../src/validationRunner.js";
 const hoisted = vi.hoisted(() => ({
   agentConstructions: [] as unknown[],
   finalOutput: undefined as unknown,
+  runPrompts: [] as string[],
 }));
 
 vi.mock("@openai/agents", () => ({
@@ -19,7 +20,7 @@ vi.mock("@openai/agents", () => ({
       hoisted.agentConstructions.push(options);
     }
   },
-  run: vi.fn(async () => ({ finalOutput: hoisted.finalOutput })),
+  run: vi.fn(async (_agent, prompt: string) => { hoisted.runPrompts.push(prompt); return { finalOutput: hoisted.finalOutput }; }),
 }));
 
 const taskBrief: TaskBrief = {
@@ -77,6 +78,7 @@ describe("Reviewer", () => {
   beforeEach(() => {
     hoisted.agentConstructions.length = 0;
     hoisted.finalOutput = acceptReport;
+    hoisted.runPrompts.length = 0;
   });
 
   it("accepts valid ACCEPT when validation passed", async () => {
@@ -119,6 +121,88 @@ describe("Reviewer", () => {
     expect(received?.taskBrief).toEqual(taskBrief);
     expect(received?.workspaceDiff).toContain("diff --git");
     expect(received?.validationReport.status).toBe("PASS");
+  });
+
+
+  it("instructs the OpenAI Reviewer to accept validation-required support files after successful rework", async () => {
+    const reworkInput: ReviewerInput = {
+      ...input("PASS"),
+      taskBrief: {
+        ...taskBrief,
+        acceptanceCriteria: ["All project validation commands pass."],
+      },
+      codingResult: {
+        ...input().codingResult,
+        changedFiles: ["README.md", ".support-marker"],
+      },
+      workspaceDiff: "diff --git a/.support-marker b/.support-marker\nnew file mode 100644\n+fixed\n",
+      workspaceStatus: " M README.md\n?? .support-marker\n",
+      validationReport: {
+        ...validation("PASS"),
+        results: [{
+          name: "test",
+          command: "npm run test",
+          required: true,
+          status: "PASS",
+          exitCode: 0,
+          signal: null,
+          stdout: "All tests passed after creating .support-marker",
+          stderr: "",
+          durationMs: 10,
+          timedOut: false,
+        }],
+      },
+      reworkContext: {
+        reworkPackage: {
+          schemaVersion: 1,
+          attempt: 1,
+          originalObjective: "Make validation pass.",
+          acceptanceCriteria: ["All project validation commands pass."],
+          blockingFindings: [{
+            id: "validation-failed",
+            title: "Validation requires a support marker file",
+            evidence: "npm run test failed with: Create a file named .support-marker containing exactly: fixed",
+            requiredChange: "Create the support marker file required by validation.",
+          }],
+          preserve: ["README.md changes"],
+          mustChange: ["Create the support marker file required by validation."],
+          mustNotChange: ["No unrelated files."],
+          previousAttemptSummary: "Previous validation failed because the required support marker file was missing.",
+        },
+        previousBlockingFindings: [{
+          id: "validation-failed",
+          title: "Validation requires a support marker file",
+          evidence: "npm run test failed with: Create a file named .support-marker containing exactly: fixed",
+          requiredChange: "Create the support marker file required by validation.",
+        }],
+        requiredChanges: ["Create the support marker file required by validation."],
+        reworkReason: "Previous validation failed because the required support marker file was missing.",
+      },
+    };
+
+    const provider = createOpenAIReviewerProvider({ apiKey: "test-key", model: "test-model" });
+    await provider.review(reworkInput);
+
+    const instructions = String((hoisted.agentConstructions[0] as { instructions?: unknown }).instructions);
+    expect(instructions).toContain("supporting file");
+    expect(instructions).toContain("return ACCEPT rather than REWORK");
+    expect(instructions).toContain("reworkContext");
+    expect(hoisted.runPrompts[0]).toContain('"reworkContext"');
+    expect(hoisted.runPrompts[0]).toContain("Create the support marker file required by validation.");
+  });
+
+  it("instructs the OpenAI Reviewer that an unsupported new file may be a scope violation", async () => {
+    const provider = createOpenAIReviewerProvider({ apiKey: "test-key", model: "test-model" });
+    await provider.review({
+      ...input("PASS"),
+      codingResult: { ...input().codingResult, changedFiles: ["src/agents/reviewer.ts", "notes/random.txt"] },
+      workspaceDiff: "diff --git a/notes/random.txt b/notes/random.txt\nnew file mode 100644\n+unrelated notes\n",
+      workspaceStatus: " M src/agents/reviewer.ts\n?? notes/random.txt\n",
+    });
+
+    const instructions = String((hoisted.agentConstructions[0] as { instructions?: unknown }).instructions);
+    expect(instructions).toContain("You may flag a new file as a scope violation");
+    expect(instructions).toContain("lacks a defensible link to acceptance criteria, validation output, existing project configuration/tests, or the reworkContext");
   });
 
   it("creates an OpenAI Reviewer agent without tools", async () => {

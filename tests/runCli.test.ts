@@ -198,8 +198,9 @@ describe("runCommand rework loop", () => {
     };
     const baseValidationRunner = validationRunnerWith(["FAIL", "PASS"]);
     const validationRunner: ValidationRunner = { run: async (input) => { validationCalls.push(input.workspacePath); return baseValidationRunner.run(input); } };
+    const reviewInputs: Parameters<ReviewerProvider["review"]>[0][] = [];
     let reviewCall = 0;
-    const reviewerProvider: ReviewerProvider = { review: async () => reviewCall++ === 0 ? review("REWORK") : review("ACCEPT") };
+    const reviewerProvider: ReviewerProvider = { review: async (input) => { reviewInputs.push(input); return reviewCall++ === 0 ? review("REWORK") : review("ACCEPT"); } };
     await runCommand(["--project", "demo", "--task", "Test task"], { cwd, runsDir, taskAnalystProvider: provider, codingWorker, validationRunner, reviewerProvider });
     const [runId] = await readdir(runsDir);
     const runDir = path.join(runsDir, runId!);
@@ -207,6 +208,14 @@ describe("runCommand rework loop", () => {
     expect(continueInputs[0]!.threadId).toBe("thread-1");
     expect(continueInputs[0]!.workspacePath).toContain(path.join(runId!, "workspace"));
     expect(validationCalls).toHaveLength(2);
+    expect(reviewInputs).toHaveLength(2);
+    expect(reviewInputs[0]!.reworkContext).toBeUndefined();
+    expect(reviewInputs[1]!.reworkContext).toMatchObject({
+      previousBlockingFindings: [{ id: "finding-1", requiredChange: "Change finding-1" }],
+      requiredChanges: ["Change finding-1"],
+      reworkReason: expect.stringContaining("REWORK summary"),
+    });
+    expect(reviewInputs[1]!.reworkContext?.reworkPackage.mustChange).toEqual(["Change finding-1"]);
     const reworkPackage = JSON.parse(await readFile(path.join(runDir, "attempts", "01", "rework-package.json"), "utf8"));
     expect(reworkPackage.mustChange).toEqual(["Change finding-1"]);
     await expect(readFile(path.join(runDir, "attempts", "01", "coding-result.json"), "utf8")).resolves.toContain("thread-1");
