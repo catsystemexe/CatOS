@@ -4,7 +4,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { CodexSdkWorker, normalizeWorkBranchName, writeCodingArtifacts, type CodingResult } from "../src/codingWorker.js";
+import { buildIsolatedWorkspacePath, CodexSdkWorker, normalizeWorkBranchName, writeCodingArtifacts, type CodingResult } from "../src/codingWorker.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -60,14 +60,14 @@ describe("CodexSdkWorker", () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "catos-not-git-"));
     const worker = new CodexSdkWorker({ codexFactory: () => { throw new Error("Codex must not start"); } });
 
-    await expect(worker.executeTask({ instruction: "x", repositoryPath: directory, baseBranch: "main", runId: "run", runDir: path.join(directory, "run") })).rejects.toThrow(/Git command failed/);
+    await expect(worker.executeTask({ instruction: "x", repositoryPath: directory, baseBranch: "main", runId: "run", workspaceRoot: path.join(os.tmpdir(), "catos-workspaces") })).rejects.toThrow(/Git command failed/);
   });
 
   it("rejects a missing base branch before starting Codex", async () => {
     const repo = await createRepo("main");
     const worker = new CodexSdkWorker({ codexFactory: () => { throw new Error("Codex must not start"); } });
 
-    await expect(worker.executeTask({ instruction: "x", repositoryPath: repo, baseBranch: "missing", runId: "run", runDir: path.join(os.tmpdir(), "catos-run-missing") })).rejects.toThrow(/Git command failed/);
+    await expect(worker.executeTask({ instruction: "x", repositoryPath: repo, baseBranch: "missing", runId: "run", workspaceRoot: path.join(os.tmpdir(), "catos-run-missing") })).rejects.toThrow(/Git command failed/);
   });
 
   it("normalizes unsafe work branch names", () => {
@@ -77,8 +77,7 @@ describe("CodexSdkWorker", () => {
 
   it("creates an isolated worktree and leaves the original checkout unchanged while collecting Git diff data", async () => {
     const repo = await createRepo("main");
-    const runsRoot = await mkdtemp(path.join(os.tmpdir(), "catos-worker-"));
-    const runDir = path.join(runsRoot, "run-1");
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "catos-worker-workspaces-"));
     let receivedInstruction = "";
     let receivedWorkspace = "";
     let receivedSandboxMode = "";
@@ -101,11 +100,11 @@ describe("CodexSdkWorker", () => {
       }),
     });
 
-    const result = await worker.executeTask({ instruction: "Change README", repositoryPath: repo, baseBranch: "main", runId: "run 1", runDir });
+    const result = await worker.executeTask({ instruction: "Change README", repositoryPath: repo, baseBranch: "main", runId: "run 1", workspaceRoot });
 
     expect(receivedInstruction).toContain("Change README");
     expect(receivedInstruction).toContain("Do not create commits, push, merge, or rebase.");
-    expect(receivedWorkspace).toBe(path.join(runDir, "workspace"));
+    expect(receivedWorkspace).toBe(path.join(workspaceRoot, "run-1", "workspace"));
     expect(receivedSandboxMode).toBe("workspace-write");
     expect(result.workspacePath).toBe(receivedWorkspace);
     expect(result.threadId).toBe("thread-local");
@@ -122,10 +121,24 @@ describe("CodexSdkWorker", () => {
     await expect(git(["status", "--short"], repo)).resolves.toBe("");
   });
 
+
+
+  it("builds worktree path outside CatOS root and rejects unsafe workspace roots", async () => {
+    const catosRoot = await mkdtemp(path.join(os.tmpdir(), "catos-root-"));
+    const repo = await createRepo("main");
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "catos-external-workspaces-"));
+
+    const workspacePath = await buildIsolatedWorkspacePath({ workspaceRoot, runId: "run-42", repositoryPath: repo, catosRoot });
+    expect(workspacePath).toBe(path.join(workspaceRoot, "run-42", "workspace"));
+    expect(path.relative(catosRoot, workspacePath).startsWith("..")).toBe(true);
+
+    await expect(buildIsolatedWorkspacePath({ workspaceRoot: path.join(catosRoot, "runs"), runId: "bad", repositoryPath: repo, catosRoot })).rejects.toThrow(/CatOS repository root/);
+    await expect(buildIsolatedWorkspacePath({ workspaceRoot: path.join(repo, "nested"), runId: "bad", repositoryPath: repo, catosRoot })).rejects.toThrow(/target repository checkout/);
+  });
+
   it("passes danger-full-access to the SDK only when explicitly requested and records disabled isolation", async () => {
     const repo = await createRepo("main");
-    const runsRoot = await mkdtemp(path.join(os.tmpdir(), "catos-worker-danger-"));
-    const runDir = path.join(runsRoot, "run-1");
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "catos-worker-danger-workspaces-"));
     let receivedSandboxMode = "";
     const worker = new CodexSdkWorker({
       codexFactory: () => ({
@@ -142,7 +155,7 @@ describe("CodexSdkWorker", () => {
       }),
     });
 
-    const result = await worker.executeTask({ instruction: "Change README", repositoryPath: repo, baseBranch: "main", runId: "danger", runDir, sandboxMode: "danger-full-access" });
+    const result = await worker.executeTask({ instruction: "Change README", repositoryPath: repo, baseBranch: "main", runId: "danger", workspaceRoot, sandboxMode: "danger-full-access" });
 
     expect(receivedSandboxMode).toBe("danger-full-access");
     expect(result.sandboxMode).toBe("danger-full-access");
@@ -151,8 +164,7 @@ describe("CodexSdkWorker", () => {
 
   it("keeps the fake Codex workingDirectory scoped to the run workspace", async () => {
     const repo = await createRepo("main");
-    const runsRoot = await mkdtemp(path.join(os.tmpdir(), "catos-worker-cwd-"));
-    const runDir = path.join(runsRoot, "run-1");
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "catos-worker-cwd-workspaces-"));
     let receivedWorkspace = "";
     const worker = new CodexSdkWorker({
       codexFactory: () => ({
@@ -163,9 +175,9 @@ describe("CodexSdkWorker", () => {
       }),
     });
 
-    const result = await worker.executeTask({ instruction: "Inspect only", repositoryPath: repo, baseBranch: "main", runId: "cwd", runDir });
+    const result = await worker.executeTask({ instruction: "Inspect only", repositoryPath: repo, baseBranch: "main", runId: "cwd", workspaceRoot });
 
-    expect(receivedWorkspace).toBe(path.join(runDir, "workspace"));
+    expect(receivedWorkspace).toBe(path.join(workspaceRoot, "cwd", "workspace"));
     expect(result.workspacePath).toBe(receivedWorkspace);
   });
 });

@@ -18,7 +18,7 @@ Aktuální verze implementuje infrastrukturní kostru z první fáze MVP, první
 - nejvýše jednu opravnou iteraci při nevalidním výstupu,
 - uložení výsledku do `runs/<runId>/task-brief.json`,
 - deterministické spuštění Codex Workeru nad `TaskBrief.codexInstruction`,
-- přípravu izolovaného Git worktree v `runs/<runId>/workspace/`,
+- přípravu izolovaného Git worktree mimo strom CatOS, výchozí fallback je `/tmp/catos-workspaces/<runId>/workspace`,
 - získání změněných souborů, pracovního diffu a Git statusu přes Git,
 - uložení coding artefaktů do `coding-result.json`, `workspace.diff` a `workspace-status.txt`,
 - deterministické spuštění Validation Runneru nad izolovaným worktree,
@@ -53,7 +53,7 @@ Při úspěchu příkaz vypíše ID běhu, načtený projekt, ověřenou cestu k
 
 ## Codex Worker
 
-Codex Worker navazuje přímo na `TaskBrief.codexInstruction`. Coordinator jej spouští deterministicky; o spuštění nerozhoduje další LLM agent. Worker před spuštěním ověří, že cílová cesta je Git repozitář a že existuje nakonfigurovaná `baseBranch`. Pro každý běh vytvoří bezpečně pojmenovanou dočasnou větev `catos/<runId>` a izolovaný Git worktree v adresáři `runs/<runId>/workspace/`. Codex SDK dostává jako `workingDirectory` pouze tento worktree. Sandbox režim Codexu je konfigurovatelný přes `codex.sandboxMode`; výchozí hodnota je bezpečný režim `workspace-write`. Povolené hodnoty jsou `read-only`, `workspace-write` a `danger-full-access`. Režim `danger-full-access` je pouze explicitní kompatibilní režim pro omezená prostředí, kde Codex sandbox nelze spustit (například kontejnery bez podpory bubblewrap), nikdy se nepoužívá jako automatický fallback a vyžaduje současně `codex.acknowledgeNoSandbox: true`. Při jeho použití CatOS vypíše varování a v `coding-result.json` uloží `sandboxIsolation: "disabled"`.
+Codex Worker navazuje přímo na `TaskBrief.codexInstruction`. Coordinator jej spouští deterministicky; o spuštění nerozhoduje další LLM agent. Worker před spuštěním ověří, že cílová cesta je Git repozitář a že existuje nakonfigurovaná `baseBranch`. Pro každý běh vytvoří bezpečně pojmenovanou dočasnou větev `catos/<runId>` a izolovaný Git worktree mimo strom CatOS. Artefakty zůstávají v `runs/<runId>/`, ale pracovní checkout vzniká pod externím `workspaceRoot`, typicky `/tmp/catos-workspaces/<runId>/workspace`. Workspace root lze nastavit přes `execution.workspaceRoot`, poté přes `CATOS_WORKSPACE_ROOT`; bez obojího se použije bezpečný OS temp fallback. Codex SDK dostává jako `workingDirectory` pouze tento externí worktree. Sandbox režim Codexu je konfigurovatelný přes `codex.sandboxMode`; výchozí hodnota je bezpečný režim `workspace-write`. Povolené hodnoty jsou `read-only`, `workspace-write` a `danger-full-access`. Režim `danger-full-access` je pouze explicitní kompatibilní režim pro omezená prostředí, kde Codex sandbox nelze spustit (například kontejnery bez podpory bubblewrap), nikdy se nepoužívá jako automatický fallback a vyžaduje současně `codex.acknowledgeNoSandbox: true`. Při jeho použití CatOS vypíše varování a v `coding-result.json` uloží `sandboxIsolation: "disabled"`.
 
 Worker nepouští push, merge ani automatický commit. Po dokončení Codexu CatOS nevěří pouze textovému shrnutí, ale přes Git uloží:
 
@@ -61,11 +61,11 @@ Worker nepouští push, merge ani automatický commit. Po dokončení Codexu Cat
 - `runs/<runId>/workspace.diff` – celý pracovní diff,
 - `runs/<runId>/workspace-status.txt` – Git status worktree.
 
-Model Codexu není připnutý natvrdo. Pokud je potřeba override, lze nastavit `CATOS_CODEX_MODEL`; jinak se použije výchozí chování SDK. Tato etapa zatím neobsahuje automatickou validaci, Reviewer, rework loop, commit vytvořený CatOS, push ani merge.
+Model Codexu není připnutý natvrdo. Pokud je potřeba override, lze nastavit `CATOS_CODEX_MODEL`; jinak se použije výchozí chování SDK. Tato etapa zatím neobsahuje rework loop, commit vytvořený CatOS, push ani merge.
 
 ## Validation Runner
 
-Po dokončení Codex Workeru CatOS automaticky spustí deterministický Validation Runner. Nejde o LLM agenta: běžný TypeScript kód přečte validační příkazy z projektové konfigurace, spustí je s `cwd` nastaveným na izolovaný worktree a uloží přesný strukturovaný výsledek do `runs/<runId>/validation-report.json`. CatOS tím nevěří textovému tvrzení Codexu o úspěchu.
+Po dokončení Codex Workeru CatOS automaticky spustí deterministický Validation Runner. Nejde o LLM agenta: běžný TypeScript kód přečte validační příkazy z projektové konfigurace, spustí je s `cwd` nastaveným přesně na externí izolovaný worktree a uloží přesný strukturovaný výsledek do `runs/<runId>/validation-report.json`. CatOS tím nevěří textovému tvrzení Codexu o úspěchu.
 
 Pro MVP zůstává podporovaný stávající tvar konfigurace:
 
@@ -74,11 +74,13 @@ commands:
   typecheck: npm run typecheck
   test: npm run test
   build: npm run build
+execution:
+  workspaceRoot: /tmp/catos-workspaces
 validation:
   timeoutMs: 120000
 ```
 
-Příkazy jsou povinné a běží sekvenčně v pořadí `typecheck`, `test`, `build`. Výchozí timeout je 120 sekund na příkaz. Runner po selhání jednoho příkazu pokračuje dalšími příkazy, aby report obsahoval kompletní obraz.
+Příkazy jsou povinné a běží sekvenčně v pořadí `typecheck`, `test`, `build`. Výchozí timeout je 120 sekund na příkaz. Před spuštěním příkazů runner ověří, že workspace existuje, je Git worktree, `git rev-parse --show-toplevel` přesně odpovídá workspace path a workspace neleží uvnitř CatOS repozitáře; porušení těchto podmínek vrací `BLOCKED`. Runner po selhání jednoho příkazu pokračuje dalšími příkazy, aby report obsahoval kompletní obraz.
 
 Stavy mají tento význam:
 

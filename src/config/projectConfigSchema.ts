@@ -23,6 +23,9 @@ export const projectConfigSchema = z.object({
     allowPush: z.boolean(),
     allowMerge: z.boolean(),
   }),
+  execution: z.object({
+    workspaceRoot: z.string().min(1).optional(),
+  }).default({}),
   codex: z.object({
     sandboxMode: sandboxModeSchema.default("workspace-write"),
     acknowledgeNoSandbox: z.boolean().optional().default(false),
