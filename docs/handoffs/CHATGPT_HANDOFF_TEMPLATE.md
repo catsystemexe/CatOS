@@ -1,182 +1,87 @@
+Pravidla vytváření ChatGPT handoffů
 
-ChatGPT Handoff
+Soubor docs/handoffs/CHATGPT_HANDOFF_TEMPLATE.md obsahuje závaznou strukturu a pravidla handoffu.
 
-Jeho účelem je předat ChatGPT dostatečně přesný technický kontext bez nutnosti kopírovat celý repozitář. Soubor po každé významné implementační session aktualizuj tak, aby popisoval aktuální stav po dokončení práce.
+ChatGPT handoff nevytvářej pouze při ukončení celé Codex session. Vytvoř nový samostatný handoff po každém významném implementačním nebo opravném kroku, který má být předán ChatGPT k review.
 
+Každý krok musí vytvořit nový soubor
 
+Nový handoff ukládej do:
 
-Povinná struktura
+docs/handoffs/sessions/
 
-1. Session metadata
+Použij název:
 
-* datum
-* aktuální branch
-* výchozí commit
-* výsledný commit
-* cíl session
-* stav pracovního stromu
-
-2. Executive summary
-
-Stručně popiš:
-
-* co bylo cílem,
-* co bylo skutečně implementováno,
-* co nebylo dokončeno,
-* zda je výsledek ověřený, nebo pouze předpokládaný.
-
-Důsledně rozlišuj:
-
-* implementováno,
-* spuštěno,
-* otestováno,
-* pouze očekáváno.
-
-3. Aktuální architektura dotčené části
-
-Popiš skutečný tok programu po změně.
-
-Použij stručné schéma, například:
-
-CLI
-→ načtení Configu
-→ Zod validace
-→ kontrola repoPath
-→ vytvoření runId
-→ zápis input.json
-
-Uveď hlavní moduly, jejich odpovědnosti a vazby.
-
-4. Veřejná rozhraní a datové kontrakty
-
-U každého nového nebo změněného významného rozhraní uveď:
-
-* název,
-* soubor,
-* signaturu nebo schéma,
-* účel,
-* významné validační podmínky.
-
-Vlož krátké relevantní výřezy skutečného kódu. Nevkládej celé dlouhé soubory.
+YYYY-MM-DD_NN_short-description.md
 
 Příklad:
 
-export type TaskInput = {
-  schemaVersion: 1;
-  runId: string;
-  projectId: string;
-  goal: string;
-  createdAt: string;
-  configPath: string;
-};
+docs/handoffs/sessions/2026-07-12_05_untracked-diff-fix.md
 
-5. Změny podle souborů
+Kde:
 
-Pro každý změněný soubor uveď:
+* YYYY-MM-DD je datum,
+* NN je pořadové číslo handoffu v daném dni,
+* short-description stručně popisuje konkrétní krok.
 
-cesta/k/souboru
+Nikdy nepřepisuj starší archivní handoff.
 
-* proč byl změněn,
-* co nyní obsahuje nebo dělá,
-* důležité implementační rozhodnutí,
-* vazby na ostatní soubory,
-* známé riziko nebo omezení.
+CURRENT_CHATGPT_HANDOFF.md
 
-Nestačí pouze seznam názvů souborů.
+Po vytvoření nového archivního handoffu aktualizuj také:
 
-6. Důležitá implementační rozhodnutí
+docs/handoffs/CURRENT_CHATGPT_HANDOFF.md
 
-Uveď rozhodnutí, která nejsou zřejmá ze zadání:
+Tento soubor musí obsahovat přesnou kopii nejnovějšího archivního handoffu.
 
-* zvolená varianta,
-* proč byla zvolena,
-* jaké alternativy byly odmítnuty,
-* jaký technický dluh případně vznikl.
+CURRENT_CHATGPT_HANDOFF.md je pouze pohodlný ukazatel na poslední stav. Není náhradou historického handoffu.
 
-Nevydávej domněnky za schválená architektonická rozhodnutí.
+Kdy vytvořit nový handoff
 
-7. Validace a důkazy
+Nový samostatný handoff vytvoř zejména po:
 
-U každého příkazu uveď:
+* dokončení implementačního kroku,
+* opravě chyby nalezené při review,
+* změně architektonického rozhodnutí,
+* změně datového kontraktu,
+* doplnění významných testů,
+* změně validačního výsledku,
+* odblokování dříve blokované dependency nebo runtime validace.
 
-* přesný příkaz,
-* zda se skutečně spustil,
-* exit code,
-* stručný výsledek,
-* případnou překážku.
+Nevytvářej nový handoff po každé triviální textové úpravě uvnitř stejného kroku.
 
-Použij tabulku:
+Obsah handoffu
 
-Kontrola	Stav	Důkaz / překážka
+Každý nový handoff musí popisovat pouze aktuální konkrétní krok a výsledný stav po něm.
 
-Stavy:
+Nesmí mechanicky kombinovat text předchozího handoffu s novým textem.
 
-* PASS
-* FAIL
-* BLOCKED
-* NOT RUN
+Předchozí kontext shrň pouze stručně v sekci „Výchozí stav“.
 
-Pokud validace neproběhla, nesmí být výsledek označen za funkční nebo dokončený.
+Handoff musí jasně rozlišovat:
 
-8. Git diff summary
+* výchozí stav,
+* změny provedené v tomto kroku,
+* skutečně provedenou validaci,
+* známá rizika,
+* doporučený další krok.
 
-Uveď:
+Při pokračování ve stejné Codex session
 
-* počet změněných souborů,
-* hlavní změny v diffu,
-* případné neočekávané změny,
-* zda byly přidány generované nebo lock soubory,
-* zda commit obsahuje pouze zamýšlený rozsah.
+Pokud už v této Codex session existuje CURRENT_CHATGPT_HANDOFF.md, neupravuj pouze tento soubor.
 
-9. Rizika a podezřelá místa
+Vždy:
 
-Kriticky vyhodnoť:
+1. zjisti nejvyšší existující pořadové číslo pro aktuální datum,
+2. vytvoř nový archivní handoff s následujícím číslem,
+3. zkopíruj jeho výsledný obsah do CURRENT_CHATGPT_HANDOFF.md,
+4. ponech všechny starší archivní handoffy beze změny.
 
-* co nebylo možné ověřit,
-* kde může být chyba,
-* co může selhat v jiném prostředí,
-* zda byly přidány předčasné abstrakce,
-* zda implementace neodporuje ROADMAP_MVP.md.
+Výstup Codexu
 
-10. Otevřené úkoly
+Na konci kroku vždy uveď:
 
-Rozděl na:
-
-Blokující před pokračováním
-
-Úkoly, bez kterých není bezpečné navázat další fází.
-
-Následující doporučený krok
-
-Jeden konkrétní malý krok.
-
-Pozdější práce
-
-Věci, které nyní není vhodné implementovat.
-
-11. Otázky pro ChatGPT review
-
-Uveď 3–7 konkrétních otázek, například:
-
-* Je aktuální rozdělení modulů přiměřené velikosti MVP?
-* Je schéma Configu příliš široké?
-* Je generování runId bezpečné a testovatelné?
-* Nechybí důležitá validace před připojením Agents SDK?
-* Má se další session věnovat opravě prostředí, nebo již Task Analystovi?
-
-12. Doporučené soubory k přímému review
-
-Uveď maximálně 8 nejdůležitějších souborů, které by měl ChatGPT vidět, pokud bude potřeba detailní kontrola.
-
-Pro každý uveď důvod.
-
-Pravidla kvality
-
-* Neopisuj pouze původní zadání.
-* Nevydávej očekávaný výsledek za skutečně ověřený.
-* Neuváděj „testy prošly“, pokud nebyly spuštěny.
-* Uváděj skutečné názvy funkcí, typů a souborů.
-* Krátké klíčové výřezy kódu jsou žádoucí.
-* Celý dokument drž přibližně mezi 1 000 a 2 500 slovy.
-* Pokud se session týkala jen malé změny, dokument může být kratší.
-* Soubor musí odpovídat výslednému commitu, nikoli průběžnému stavu.
+* cestu k novému archivnímu handoffu,
+* cestu k aktualizovanému CURRENT_CHATGPT_HANDOFF.md,
+* číslo checkpointu,
+* zda byla předchozí archivní dokumentace ponechána beze změny.
