@@ -1,7 +1,7 @@
 project:
   id: demo
   name: Demo project
-  repoPath: /tmp/catos-codex-demo
+  repoPath: /tmp/catos-rework-demo
   baseBranch: main
 commands:
   typecheck: npm run typecheck

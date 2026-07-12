@@ -7,6 +7,7 @@ import { reviewChange, writeReviewReport, type ReviewerProvider } from "../agent
 import { resolveWorkspaceRoot } from "../workspaceRoot.js";
 import { buildReworkPackage, hasRepeatedBlockingFinding, writeFinalResult, writeReworkPackage } from "../reworkLoop.js";
 import type { FinalResult } from "../schemas/finalResult.js";
+import path from "node:path";
 
 type RunCliOptions = {
   cwd?: string;
