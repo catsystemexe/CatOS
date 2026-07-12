@@ -3,6 +3,7 @@ import { loadProjectConfig } from "../config/loadConfig.js";
 import { createRun } from "../runs/createRun.js";
 import { CodexSdkWorker, writeCodingArtifacts, type CodingWorker } from "../codingWorker.js";
 import { ShellValidationRunner, buildValidationCommands, writeValidationReport, type ValidationRunner } from "../validationRunner.js";
+import { reviewChange, writeReviewReport, type ReviewerProvider } from "../agents/reviewer.js";
 
 type RunCliOptions = {
   cwd?: string;
@@ -10,6 +11,7 @@ type RunCliOptions = {
   taskAnalystProvider?: TaskAnalystProvider;
   codingWorker?: CodingWorker;
   validationRunner?: ValidationRunner;
+  reviewerProvider?: ReviewerProvider;
 };
 
 function readOption(args: string[], name: string): string | undefined {
@@ -56,6 +58,27 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
     commands: buildValidationCommands(loaded.config.commands, loaded.config.validation),
   });
   const validationReportPath = await writeValidationReport(run.runDir, validationReport);
+  const reviewReport = await reviewChange({
+    taskInput: run.input,
+    taskBrief: analysis.taskBrief,
+    codingResult: {
+      threadId: codingResult.threadId,
+      finalResponse: codingResult.finalResponse,
+      workspacePath: codingResult.workspacePath,
+      changedFiles: codingResult.changedFiles,
+      sandboxMode: codingResult.sandboxMode,
+      sandboxIsolation: codingResult.sandboxIsolation,
+    },
+    workspaceDiff: codingResult.diff,
+    workspaceStatus: codingResult.status,
+    validationReport,
+    projectConstraints: {
+      permissions: loaded.config.permissions,
+      workflow: loaded.config.workflow,
+      codex: loaded.config.codex,
+    },
+  }, { provider: options.reviewerProvider });
+  const reviewReportPath = await writeReviewReport(run.runDir, reviewReport);
 
   console.log("CatOS run created");
   console.log(`Run ID: ${run.runId}`);
@@ -77,5 +100,9 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
     const exit = result.exitCode === null ? "null" : String(result.exitCode);
     console.log(`- ${result.name}: ${result.status} (exit ${exit}, ${(result.durationMs / 1000).toFixed(1)}s)`);
   }
-  console.log(`Report: ${validationReportPath}`);
+  console.log(`Validation report: ${validationReportPath}`);
+  console.log(`Review verdict: ${reviewReport.verdict}`);
+  console.log(`Review blocking findings: ${reviewReport.blockingFindings.length}`);
+  console.log(`Review warnings: ${reviewReport.warnings.length}`);
+  console.log(`Review report: ${reviewReportPath}`);
 }

@@ -4,7 +4,7 @@ CatOS je připravovaná CLI aplikace pro řízení bezpečné a auditovatelné a
 
 ## Aktuální stav MVP
 
-Aktuální verze implementuje infrastrukturní kostru z první fáze MVP, první analytický krok a první verzi Codex Workeru:
+Aktuální verze implementuje infrastrukturní kostru z první fáze MVP, první analytický krok, první verzi Codex Workeru, Validation Runner a první verzi Reviewer agenta:
 
 - CLI příkaz `run`,
 - načtení projektové konfigurace z YAML souboru,
@@ -22,7 +22,9 @@ Aktuální verze implementuje infrastrukturní kostru z první fáze MVP, první
 - získání změněných souborů, pracovního diffu a Git statusu přes Git,
 - uložení coding artefaktů do `coding-result.json`, `workspace.diff` a `workspace-status.txt`,
 - deterministické spuštění Validation Runneru nad izolovaným worktree,
-- uložení strukturovaného validačního reportu do `validation-report.json`.
+- uložení strukturovaného validačního reportu do `validation-report.json`,
+- spuštění Reviewer agenta bez shellu a bez filesystem tools nad omezeným review package,
+- uložení strukturovaného review verdiktu do `review-report.json`.
 
 ## Požadavky
 
@@ -47,7 +49,7 @@ Součástí repozitáře je demonstrační konfigurace `projects/demo.yaml`, kte
 OPENAI_API_KEY=... npm run catos -- run --project demo --task "Testovací úkol"
 ```
 
-Při úspěchu příkaz vypíše ID běhu, načtený projekt, ověřenou cestu k cílovému repozitáři, cestu k vytvořenému `input.json`, cestu k `task-brief.json`, cestu k izolovanému worktree, počet změněných souborů, cestu k diffu, Codex thread ID, celkový validation status, výsledek každého validačního příkazu a cestu k `validation-report.json`.
+Při úspěchu příkaz vypíše ID běhu, načtený projekt, ověřenou cestu k cílovému repozitáři, cestu k vytvořenému `input.json`, cestu k `task-brief.json`, cestu k izolovanému worktree, počet změněných souborů, cestu k diffu, Codex thread ID, celkový validation status, výsledek každého validačního příkazu, cestu k `validation-report.json`, review verdict, počet blocking findings, počet warnings a cestu k `review-report.json`.
 
 ## Codex Worker
 
@@ -84,7 +86,25 @@ Stavy mají tento význam:
 - `FAIL` – příkaz byl spuštěn a vrátil nenulový exit code.
 - `BLOCKED` – příkaz nešlo korektně spustit nebo dokončit, například kvůli nenalezenému executable, timeoutu nebo interní chybě runneru.
 
-Celkový stav reportu se počítá deterministicky podle závažnosti `BLOCKED > FAIL > PASS` pouze z povinných příkazů. Tato etapa zatím neobsahuje Reviewer, rework loop ani automatickou opravu validačních chyb.
+Celkový stav reportu se počítá deterministicky podle závažnosti `BLOCKED > FAIL > PASS` pouze z povinných příkazů. Validation Runner používá pouze stavy `PASS`, `FAIL` a `BLOCKED`. Tyto stavy popisují výsledek deterministických validačních příkazů; nejsou to kvalitativní review verdikty.
+
+## Reviewer
+
+Po Validation Runneru CatOS spustí první verzi Reviewer agenta přes OpenAI Agents SDK. Reviewer nemá shell, nemá filesystem tools a nemůže měnit repozitář. Dostává pouze omezený review package: původní `TaskInput`, `TaskBrief`, metadata `coding-result.json` bez celého diffu, celý `workspace.diff`, `workspace-status.txt`, `validation-report.json` a relevantní omezení z projektové konfigurace. Text `finalResponse` z Codex Workeru je pouze neautoritativní pomocný údaj; rozhodující jsou zadání, diff a validační důkazy.
+
+Reviewer ukládá validovaný strukturovaný artefakt:
+
+- `runs/<runId>/review-report.json` – kvalitativní verdikt Reviewera ve schématu `ReviewReport`.
+
+Reviewer používá vlastní verdikty:
+
+- `ACCEPT` – změna podle dostupných důkazů splňuje zadání.
+- `REWORK` – změna potřebuje opravu, ale zatím se automaticky nespouští další Codex iterace.
+- `HUMAN_REQUIRED` – automatické posouzení nestačí nebo je potřeba lidské rozhodnutí.
+
+Důležité rozdělení: Validation Runner vrací statusy `PASS`, `FAIL`, `BLOCKED`, zatímco Reviewer vrací verdikty `ACCEPT`, `REWORK`, `HUMAN_REQUIRED`. Reviewer nikdy nevrací `FAIL`. Pokud je validation status `FAIL` nebo `BLOCKED`, CatOS deterministicky zakazuje verdict `ACCEPT` a nevalidní výstup odmítne. Pokud review package překročí jednoduchý MVP limit velikosti, CatOS kontext tiše nezkracuje a vrátí `HUMAN_REQUIRED`.
+
+Model Reviewera lze volitelně přepsat přes `CATOS_REVIEWER_MODEL`; výchozí model navazuje na výchozí nastavení Task Analysta. Tato etapa zatím neobsahuje rework loop, Human Gate, commit vytvořený CatOS, push ani GitHub automatizaci.
 
 ## TaskBrief
 
@@ -104,9 +124,9 @@ Testy používají injected provider, takže nevyžadují skutečné API volán�
 
 ## Co tato verze ještě neumí
 
-Tato verze záměrně neobsahuje Reviewer, rework loop, event log, databázi, Temporal, LangGraph ani GitHub automatizaci. Také zatím neumí:
+Tato verze záměrně neobsahuje rework loop, Human Gate, event log, databázi, Temporal, LangGraph ani GitHub automatizaci. Také zatím neumí:
 
-- spouštět Reviewer nebo automaticky opravovat validační chyby,
+- automaticky opravovat validační nebo review chyby,
 - vytvářet Git commity v cílovém projektu,
 - pushovat nebo mergovat změny,
 - ukládat stav do databáze,

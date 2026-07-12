@@ -7,6 +7,7 @@ import type { TaskAnalystProvider } from "../src/agents/taskAnalyst.js";
 import { taskBriefSchema, type TaskBrief } from "../src/schemas/taskBrief.js";
 import type { CodingWorker } from "../src/codingWorker.js";
 import type { ValidationRunner } from "../src/validationRunner.js";
+import type { ReviewerProvider } from "../src/agents/reviewer.js";
 
 const brief: TaskBrief = {
   objective: "Analyze a demo task.",
@@ -17,7 +18,7 @@ const brief: TaskBrief = {
 };
 
 describe("runCommand", () => {
-  it("runs Task Analyst, Coding Worker, Validation Runner, and writes validation-report.json", async () => {
+  it("runs Task Analyst, Coding Worker, Validation Runner, Reviewer, and writes review-report.json", async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), "catos-cli-"));
     const runsDir = path.join(cwd, "runs");
     await mkdir(path.join(cwd, "projects"));
@@ -46,6 +47,7 @@ describe("runCommand", () => {
         };
       },
     };
+    const reviewerCalls: string[] = [];
     const validationRunner: ValidationRunner = {
       run: async (input) => {
         validationCalls.push(`${input.workspacePath}|${input.commands.map((command) => `${command.name}:${command.command}:${command.required}:${command.timeoutMs}`).join(",")}`);
@@ -70,8 +72,21 @@ describe("runCommand", () => {
         };
       },
     };
+    const reviewerProvider: ReviewerProvider = {
+      review: async (input) => {
+        reviewerCalls.push(`${input.taskBrief.objective}|${input.workspaceDiff}|${input.validationReport.status}`);
+        return {
+          schemaVersion: 1,
+          verdict: "ACCEPT",
+          summary: "Looks good.",
+          reviewedAcceptanceCriteria: [{ criterion: brief.acceptanceCriteria[0]!, status: "SATISFIED", evidence: "Diff and validation support it." }],
+          blockingFindings: [],
+          warnings: ["Demo warning."],
+        };
+      },
+    };
 
-    await runCommand(["--project", "demo", "--task", "Test task"], { cwd, runsDir, taskAnalystProvider: provider, codingWorker, validationRunner });
+    await runCommand(["--project", "demo", "--task", "Test task"], { cwd, runsDir, taskAnalystProvider: provider, codingWorker, validationRunner, reviewerProvider });
 
     const runDirs = await import("node:fs/promises").then((fs) => fs.readdir(runsDir));
     expect(runDirs).toHaveLength(1);
@@ -88,5 +103,9 @@ describe("runCommand", () => {
     expect(validationReport.results.map((result: { name: string }) => result.name)).toEqual(["typecheck", "test", "build"]);
     await expect(readFile(path.join(runsDir, runDirs[0]!, "workspace.diff"), "utf8")).resolves.toContain("diff --git");
     await expect(readFile(path.join(runsDir, runDirs[0]!, "workspace-status.txt"), "utf8")).resolves.toContain("README.md");
+    expect(reviewerCalls).toEqual([`${brief.objective}|diff --git a/README.md b/README.md\n|PASS`]);
+    const reviewReport = JSON.parse(await readFile(path.join(runsDir, runDirs[0]!, "review-report.json"), "utf8"));
+    expect(reviewReport.verdict).toBe("ACCEPT");
+    expect(reviewReport.warnings).toHaveLength(1);
   });
 });
