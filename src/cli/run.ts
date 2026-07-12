@@ -188,6 +188,8 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
     finalChangedFiles: codingResult.changedFiles,
     finalValidationStatus: validationReport.status,
     finalReviewReportPath: reviewReportPath,
+    finalDiffPath: path.join(reworkAttempts === 0 ? run.runDir : path.join(run.runDir, "attempts", String(reworkAttempts).padStart(2, "0")), "workspace.diff"),
+    finalValidationReportPath: validationReportPath,
   };
   const finalResultPath = await writeFinalResult(run.runDir, finalResult);
 
