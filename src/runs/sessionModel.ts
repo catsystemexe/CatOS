@@ -43,6 +43,18 @@ export type ArtifactRefs = {
   runtimeErrorPath?: string;
 };
 
+export type SessionGitContext = {
+  projectId: string;
+  repositoryPath: string;
+  remoteName: string;
+  remoteUrl?: string;
+  baseBranch: string;
+  baseCommit: string;
+  runBranch: string;
+  prTargetBranch: string;
+  workspacePath: string;
+};
+
 export type Session = {
   schemaVersion: 1;
   sessionId: string;
@@ -53,6 +65,7 @@ export type Session = {
   updatedAt: string;
   branch: string;
   workspacePath?: string;
+  git?: SessionGitContext;
   steps: string[];
   activeStepId?: string;
 };
@@ -134,7 +147,7 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
 export async function readJson<T>(filePath: string): Promise<T> {
   return JSON.parse(await readFile(filePath, "utf8")) as T;
 }
-async function appendTimeline(
+export async function appendTimelineEvent(
   runDir: string,
   event: {
     type: string;
@@ -158,6 +171,7 @@ export async function createSession(input: {
   goal: string;
   branch: string;
   workspacePath?: string;
+  git?: SessionGitContext;
   requestTitle?: string;
   request?: string;
   now?: Date;
@@ -174,6 +188,7 @@ export async function createSession(input: {
     updatedAt: createdAt,
     branch: input.branch,
     workspacePath: input.workspacePath,
+    git: input.git,
     steps: [stepId],
     activeStepId: stepId,
   };
@@ -195,16 +210,16 @@ export async function createSession(input: {
     `${step.request}\n`,
     "utf8",
   );
-  await appendTimeline(
+  await appendTimelineEvent(
     input.runDir,
     {
       type: "session.created",
       sessionId: session.sessionId,
-      metadata: { runId: input.runId, branch: input.branch },
+      metadata: { runId: input.runId, branch: input.branch, baseBranch: input.git?.baseBranch, baseCommit: input.git?.baseCommit, runBranch: input.git?.runBranch, prTargetBranch: input.git?.prTargetBranch },
     },
     createdAt,
   );
-  await appendTimeline(
+  await appendTimelineEvent(
     input.runDir,
     {
       type: "step.created",
@@ -252,7 +267,7 @@ async function appendStepStatusChanged(
   timestamp = nowIso(),
 ): Promise<void> {
   if (from !== to)
-    await appendTimeline(
+    await appendTimelineEvent(
       runDir,
       {
         type: "step.status_changed",
@@ -291,7 +306,7 @@ export async function createStep(input: {
         current.status,
         createdAt,
       );
-      await appendTimeline(
+      await appendTimelineEvent(
         input.runDir,
         {
           type: "step.completed",
@@ -328,7 +343,7 @@ export async function createStep(input: {
     `${step.request}\n`,
     "utf8",
   );
-  await appendTimeline(
+  await appendTimelineEvent(
     input.runDir,
     {
       type: "step.created",
@@ -411,7 +426,7 @@ export async function startAttempt(input: {
     "utf8",
   );
 
-  await appendTimeline(
+  await appendTimelineEvent(
     input.runDir,
     {
       type: "attempt.started",
@@ -477,7 +492,7 @@ export async function completeAttempt(input: {
     ...session,
     workspacePath: input.workspacePath ?? session.workspacePath,
   });
-  await appendTimeline(
+  await appendTimelineEvent(
     input.runDir,
     {
       type: input.status === "failed" ? "attempt.failed" : "attempt.completed",
@@ -581,7 +596,7 @@ export async function recordDecision(input: {
     status: nextStatus,
     activeStepId: nextActiveStepId,
   });
-  await appendTimeline(
+  await appendTimelineEvent(
     input.runDir,
     {
       type: "decision.recorded",
@@ -593,7 +608,7 @@ export async function recordDecision(input: {
     createdAt,
   );
   if (isClosedStep(step.status))
-    await appendTimeline(
+    await appendTimelineEvent(
       input.runDir,
       {
         type: "step.completed",
@@ -604,7 +619,7 @@ export async function recordDecision(input: {
       createdAt,
     );
   if (nextStatus !== session.status)
-    await appendTimeline(
+    await appendTimelineEvent(
       input.runDir,
       {
         type: "session.status_changed",
@@ -665,8 +680,8 @@ export async function recordCommitEvent(
   const s = await loadSession(runDir).catch(() => undefined);
   if (!s) return;
   await persistSession(runDir, { ...s, status: "committed" });
-  await appendTimeline(runDir, {
-    type: "commit.created",
+  await appendTimelineEvent(runDir, {
+    type: "git.commit_created",
     sessionId: s.sessionId,
     metadata,
   });

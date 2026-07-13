@@ -24,6 +24,9 @@ export type CodingTask = {
   instruction: string;
   repositoryPath: string;
   baseBranch: string;
+  baseCommit?: string;
+  runBranch?: string;
+  workspacePath?: string;
   runId: string;
   workspaceRoot: string;
   sandboxMode?: SandboxMode;
@@ -564,13 +567,13 @@ export class CodexSdkWorker implements CodingWorker {
   async executeTask(input: CodingTask): Promise<CodingResult> {
     const repositoryPath = path.resolve(input.repositoryPath);
     await this.git(["rev-parse", "--is-inside-work-tree"], repositoryPath);
-    await this.git(["rev-parse", "--verify", `${input.baseBranch}^{commit}`], repositoryPath);
+    const baseCommit = input.baseCommit ?? await this.git(["rev-parse", `${input.baseBranch}^{commit}`], repositoryPath);
+    await this.git(["cat-file", "-e", `${baseCommit}^{commit}`], repositoryPath);
 
-    const branchName = normalizeWorkBranchName(input.runId);
-    const workspacePath = await buildIsolatedWorkspacePath({ workspaceRoot: input.workspaceRoot, runId: input.runId, repositoryPath, catosRoot: this.catosRoot });
+    const branchName = input.runBranch ?? normalizeWorkBranchName(input.runId);
+    const workspacePath = input.workspacePath ?? await buildIsolatedWorkspacePath({ workspaceRoot: input.workspaceRoot, runId: input.runId, repositoryPath, catosRoot: this.catosRoot });
     await mkdir(path.dirname(workspacePath), { recursive: true });
-    await this.git(["branch", branchName, input.baseBranch], repositoryPath);
-    await this.git(["worktree", "add", workspacePath, branchName], repositoryPath);
+    await this.git(["worktree", "add", "-b", branchName, workspacePath, baseCommit], repositoryPath);
 
     const sandboxMode = input.sandboxMode ?? "workspace-write";
     const sandboxIsolation = sandboxMode === "danger-full-access" ? "disabled" : "enabled";
