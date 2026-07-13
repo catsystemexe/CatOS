@@ -3,6 +3,7 @@ import path from "node:path";
 import { reviewReportSchema } from "../schemas/reviewReport.js";
 import { taskBriefSchema } from "../schemas/taskBrief.js";
 import { FileHumanGate, formatZodError, loadFinalResult, resolveRunArtifact, type HumanDecisionInput } from "../humanGate.js";
+import { recordDecision, type DecisionType } from "../runs/sessionModel.js";
 
 type DecideCliOptions = { cwd?: string; runsDir?: string };
 
@@ -23,11 +24,18 @@ function readOption(args: string[], name: string): string | undefined {
   return collectOption(args, name)[0];
 }
 
-function parseDecision(value: string | undefined): HumanDecisionInput["decision"] {
-  if (value === "approve") return "APPROVE";
-  if (value === "reject") return "REJECT";
-  if (value === "request-changes") return "REQUEST_CHANGES";
-  throw new Error("Neplatné nebo chybějící --decision. Povolené hodnoty: approve, reject, request-changes.");
+function parseHumanDecision(value: string | undefined): HumanDecisionInput["decision"] {
+  if (value === "approve" || value === "accept") return "APPROVE";
+  if (value === "reject" || value === "abort") return "REJECT";
+  if (value === "request-changes" || value === "retry" || value === "revise") return "REQUEST_CHANGES";
+  throw new Error("Neplatné nebo chybějící --decision. Povolené hodnoty: accept, retry, revise, reject, abort (legacy: approve, request-changes).");
+}
+
+function parseAutoCodexDecision(value: string | undefined): DecisionType {
+  if (value === "approve") return "accept";
+  if (value === "request-changes") return "revise";
+  if (value === "accept" || value === "retry" || value === "revise" || value === "reject" || value === "abort") return value;
+  throw new Error("Neplatné nebo chybějící --decision. Povolené hodnoty: accept, retry, revise, reject, abort.");
 }
 
 function evidenceFromReviewed(values: string[]): HumanDecisionInput["evidenceReviewed"] {
@@ -88,12 +96,14 @@ export async function decideCommand(args: string[], options: DecideCliOptions = 
   console.log(`Validation report: ${validationPath}`);
   console.log(`Review report: ${reviewReportPath}`);
 
+  const autoDecision = parseAutoCodexDecision(readOption(args, "--decision"));
+  const reason = readOption(args, "--reason") ?? readOption(args, "--comment");
   const gate = new FileHumanGate();
   let decision;
   try {
     decision = await gate.recordDecision({ runId, runDir, finalResult }, {
-      decision: parseDecision(readOption(args, "--decision")),
-      comment: readOption(args, "--comment"),
+      decision: parseHumanDecision(readOption(args, "--decision")),
+      comment: reason,
       requestedChanges: collectOption(args, "--change"),
       evidenceReviewed: evidenceFromReviewed(collectOption(args, "--reviewed")),
     });
@@ -101,7 +111,11 @@ export async function decideCommand(args: string[], options: DecideCliOptions = 
     throw new Error(formatZodError(error));
   }
 
+  const hasSession = await stat(path.join(runDir, "session.json")).then(() => true, () => false);
+  const sessionDecision = hasSession ? await recordDecision({ runDir, type: autoDecision, reason, actor: "human" }) : undefined;
+
   console.log(`Human decision: ${decision.decision}`);
+  if (sessionDecision) console.log(`AutoCodex decision: ${sessionDecision.type}`);
   console.log(`Run: ${runId}`);
   console.log(`Decision: ${path.join(runDir, "human-decision.json")}`);
   if (decision.decision === "REQUEST_CHANGES") {

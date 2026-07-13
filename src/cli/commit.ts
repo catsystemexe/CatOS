@@ -6,6 +6,7 @@ import { formatZodError, loadFinalResult } from "../humanGate.js";
 import { humanDecisionSchema } from "../schemas/humanDecision.js";
 import { taskBriefSchema } from "../schemas/taskBrief.js";
 import { taskInputSchema } from "../schemas/taskInput.js";
+import { recordCommitEvent, recordDecision } from "../runs/sessionModel.js";
 
 type CommitCliOptions = { cwd?: string; runsDir?: string };
 function collectOption(args: string[], name: string): string[] { const out:string[]=[]; for(let i=0;i<args.length;i++){ if(args[i]===name){ const v=args[i+1]; if(!v) throw new Error(`Chybí hodnota pro ${name}.`); out.push(v); i++; }} return out; }
@@ -27,6 +28,10 @@ export async function commitCommand(args: string[], options: CommitCliOptions = 
     const loaded = await loadProjectConfig(input.configPath, options.cwd ?? process.cwd());
     const before = await readFile(path.join(runDir, "commit-result.json"), "utf8").then(() => true, () => false);
     const result = await new GitCommitWorker().commit({ runId, runDir, finalResult, humanDecision, taskBrief, config: loaded.config, message: readOption(args, "--message") });
+    if (!before) {
+      await recordDecision({ runDir, type: "commit", reason: `Commit ${result.commitSha} created`, actor: "system" }).catch(() => undefined);
+      await recordCommitEvent(runDir, { commitSha: result.commitSha, branch: result.branch, message: result.commitMessage, changedFiles: result.changedFiles });
+    }
     if (before) {
       console.log("Run already committed");
       console.log(`Commit: ${result.commitSha}`);

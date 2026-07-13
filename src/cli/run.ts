@@ -8,6 +8,7 @@ import { resolveWorkspaceRoot } from "../workspaceRoot.js";
 import { buildReworkPackage, hasRepeatedBlockingFinding, writeFinalResult, writeReworkPackage } from "../reworkLoop.js";
 import type { FinalResult } from "../schemas/finalResult.js";
 import path from "node:path";
+import { artifactRefs, completeAttempt, createSession, startAttempt } from "../runs/sessionModel.js";
 
 type RunCliOptions = {
   cwd?: string;
@@ -44,6 +45,7 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
   }
 
   const run = await createRun(projectId, goal, configPath, { runsDir: options.runsDir });
+  const sessionState = await createSession({ runDir: run.runDir, runId: run.runId, goal, branch: `catos/${run.runId}`, requestTitle: "Initial run", request: goal });
   const analysis = await analyzeTaskBrief(goal, projectId, { provider: options.taskAnalystProvider });
   const taskBriefPath = await writeTaskBrief(run.runDir, analysis.taskBrief);
   const workspaceRoot = resolveWorkspaceRoot(loaded.config.execution.workspaceRoot);
@@ -51,6 +53,9 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
   const validationRunner = options.validationRunner ?? new ShellValidationRunner();
   const validationCommands = buildValidationCommands(loaded.config.commands, loaded.config.validation);
   const maxReworkAttempts = loaded.config.workflow.maxReworkAttempts;
+
+  let currentStep = sessionState.step;
+  let currentAttempt = await startAttempt({ runDir: run.runDir, step: currentStep, prompt: analysis.taskBrief.codexInstruction, runtimeMode: loaded.config.codex.sandboxMode });
 
   let codingResult = await codingWorker.executeTask({
     instruction: analysis.taskBrief.codexInstruction,
@@ -63,6 +68,29 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
   const codingArtifacts = await writeCodingArtifacts(run.runDir, analysis.taskBrief, codingResult);
   let validationReport = await validationRunner.run({ workspacePath: codingResult.workspacePath, commands: validationCommands });
   let validationReportPath = await writeValidationReport(run.runDir, validationReport);
+  await completeAttempt({
+    runDir: run.runDir,
+    step: currentStep,
+    attempt: currentAttempt,
+    status: "succeeded",
+    codexThreadId: codingResult.threadId,
+    resultStatus: "completed",
+    changedFiles: codingResult.changedFiles,
+    validationSummary: validationReport.status,
+    workspacePath: codingResult.workspacePath,
+    artifacts: artifactRefs(run.runDir, {
+      codingResultPath: codingArtifacts.codingResultPath,
+      diffPath: codingArtifacts.diffPath,
+      statusPath: codingArtifacts.statusPath,
+      taskBriefPath: codingArtifacts.taskBriefPath,
+      validationReportPath,
+      runtimeDir: path.join(path.dirname(codingResult.workspacePath), "runtime"),
+      runtimeManifestPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "runtime.json"),
+      runtimeStdoutPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "codex-runtime.stdout.log"),
+      runtimeStderrPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "codex-runtime.stderr.log"),
+      runtimeErrorPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "codex-runtime-error.json"),
+    }),
+  });
   let reviewReport = await reviewChange({
     taskInput: run.input,
     taskBrief: analysis.taskBrief,
@@ -126,6 +154,8 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
     await writeReworkPackage(attemptDir, reworkPackage);
     const beforeReview = reviewReport;
     const beforeValidationStatus = validationReport.status;
+    currentStep = await import("../runs/sessionModel.js").then(m => m.loadStep(run.runDir, currentStep.stepId));
+    currentAttempt = await startAttempt({ runDir: run.runDir, step: currentStep, prompt: reworkPackage.mustChange.join("\n"), runtimeMode: loaded.config.codex.sandboxMode });
     codingResult = await codingWorker.continueTask({
       threadId: codingResult.threadId,
       workspacePath: codingResult.workspacePath,
@@ -136,6 +166,30 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
     await writeCodingArtifacts(attemptDir, analysis.taskBrief, codingResult);
     validationReport = await validationRunner.run({ workspacePath: codingResult.workspacePath, commands: validationCommands });
     validationReportPath = await writeValidationReport(attemptDir, validationReport);
+    await completeAttempt({
+      runDir: run.runDir,
+      step: currentStep,
+      attempt: currentAttempt,
+      status: "succeeded",
+      codexThreadId: codingResult.threadId,
+      resultStatus: "completed",
+      changedFiles: codingResult.changedFiles,
+      validationSummary: validationReport.status,
+      workspacePath: codingResult.workspacePath,
+      artifacts: artifactRefs(run.runDir, {
+        codingResultPath: path.join(attemptDir, "coding-result.json"),
+        diffPath: path.join(attemptDir, "workspace.diff"),
+        statusPath: path.join(attemptDir, "workspace-status.txt"),
+        taskBriefPath: path.join(attemptDir, "task-brief.json"),
+        validationReportPath,
+        reviewReportPath,
+        runtimeDir: path.join(path.dirname(codingResult.workspacePath), "runtime"),
+        runtimeManifestPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "runtime.json"),
+        runtimeStdoutPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "codex-runtime.stdout.log"),
+        runtimeStderrPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "codex-runtime.stderr.log"),
+        runtimeErrorPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "codex-runtime-error.json"),
+      }),
+    });
     reviewReport = await reviewChange({
       taskInput: run.input,
       taskBrief: analysis.taskBrief,
