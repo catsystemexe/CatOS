@@ -30,8 +30,8 @@ export type Decision = { schemaVersion: 1; decisionId: string; createdAt: string
 function nowIso(now = new Date()): string { return now.toISOString(); }
 function newId(prefix: string): string { return `${prefix}_${randomUUID()}`; }
 function rel(runDir: string, p: string | undefined): string | undefined { return p ? path.relative(runDir, p) || path.basename(p) : undefined; }
-function stepDir(runDir: string, step: Pick<Step, "order" | "stepId">): string { return path.join(runDir, "steps", `${String(step.order).padStart(3, "0")}-${step.stepId}`); }
-function attemptDir(runDir: string, step: Pick<Step, "order" | "stepId">, attempt: Pick<Attempt, "order" | "attemptId">): string { return path.join(stepDir(runDir, step), "attempts", `${String(attempt.order).padStart(3, "0")}-${attempt.attemptId}`); }
+export function stepDir(runDir: string, step: Pick<Step, "order" | "stepId">): string { return path.join(runDir, "steps", `${String(step.order).padStart(3, "0")}-${step.stepId}`); }
+export function attemptDir(runDir: string, step: Pick<Step, "order" | "stepId">, attempt: Pick<Attempt, "order" | "attemptId">): string { return path.join(stepDir(runDir, step), "attempts", `${String(attempt.order).padStart(3, "0")}-${attempt.attemptId}`); }
 async function writeJson(filePath: string, value: unknown): Promise<void> { await mkdir(path.dirname(filePath), { recursive: true }); await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8"); }
 export async function readJson<T>(filePath: string): Promise<T> { return JSON.parse(await readFile(filePath, "utf8")) as T; }
 async function appendTimeline(runDir: string, event: { type: string; sessionId: string; stepId?: string; attemptId?: string; metadata?: Record<string, unknown> }, timestamp = nowIso()): Promise<void> {

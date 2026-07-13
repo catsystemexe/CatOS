@@ -28,6 +28,14 @@ export type ReworkCodingTask = {
   sandboxMode?: SandboxMode;
 };
 
+export type ContinueCodingTask = {
+  threadId?: string;
+  instruction: string;
+  workspacePath: string;
+  workspaceRoot: string;
+  sandboxMode?: SandboxMode;
+};
+
 export type CodingResult = {
   threadId: string;
   finalResponse: string;
@@ -42,6 +50,7 @@ export type CodingResult = {
 export interface CodingWorker {
   executeTask(input: CodingTask): Promise<CodingResult>;
   continueTask(input: ReworkCodingTask): Promise<CodingResult>;
+  continueInstruction?(input: ContinueCodingTask): Promise<CodingResult>;
 }
 
 type GitResult = { stdout: string; stderr: string };
@@ -582,6 +591,16 @@ export class CodexSdkWorker implements CodingWorker {
   }
 
   async continueTask(input: ReworkCodingTask): Promise<CodingResult> {
+    return await this.continueInstruction({
+      threadId: input.threadId,
+      instruction: buildReworkCodexInstruction(input.reworkPackage),
+      workspacePath: input.workspacePath,
+      workspaceRoot: input.workspaceRoot,
+      sandboxMode: input.sandboxMode,
+    });
+  }
+
+  async continueInstruction(input: ContinueCodingTask): Promise<CodingResult> {
     const sandboxMode = input.sandboxMode ?? "workspace-write";
     const sandboxIsolation = sandboxMode === "danger-full-access" ? "disabled" : "enabled";
     const guarded = await guardCodexWorkspace({ workspacePath: input.workspacePath, workspaceRoot: input.workspaceRoot, catosRoot: this.catosRoot });
@@ -592,12 +611,11 @@ export class CodexSdkWorker implements CodingWorker {
       cwd: guarded.workspacePath,
       runtimeDir: runtime.runtimeDir,
       request: {
-        mode: "continue",
-        threadId: input.threadId,
+        ...(input.threadId ? { mode: "continue" as const, threadId: input.threadId } : { mode: "start" as const }),
         workingDirectory: guarded.workspacePath,
         sandboxMode,
         ...(model ? { model } : {}),
-        instruction: buildReworkCodexInstruction(input.reworkPackage),
+        instruction: input.instruction,
       },
     });
     return await this.collectResult({
