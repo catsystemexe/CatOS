@@ -23,23 +23,51 @@ async function api(url, options) {
   return payload;
 }
 
+function projectLabel(project) {
+  if (project.status === 'ready') return project.id;
+  return `${project.id} [${project.blockingReason || (project.status === 'invalid' ? 'invalid config' : project.status)}]`;
+}
+
 async function loadProjects() {
+  const previous = $('project').value;
   const { projects } = await api('/api/projects');
-  $('project').innerHTML = projects.map((project) => `<option value="${project.id}">${project.id}</option>`).join('');
   window.projects = projects;
+  $('project').innerHTML = projects.map((project) => `<option value="${escapeHtml(project.id)}">${escapeHtml(projectLabel(project))}</option>`).join('');
+  if (projects.length === 0) {
+    $('project').innerHTML = '<option value="">No project configs found</option>';
+    $('repo').value = '';
+    $('base').value = '';
+    $('target').value = '';
+    $('sandbox').textContent = 'Sandbox: -';
+    $('projectStatus').textContent = 'Project status: No project configs found';
+    $('runReason').textContent = 'RUN disabled: No project configs found';
+    $('run').disabled = true;
+    return;
+  }
+  const next = projects.some((project) => project.id === previous) ? previous : projects[0].id;
+  $('project').value = next;
   fillProject();
 }
 
 function fillProject() {
   const project = (window.projects || []).find((item) => item.id === $('project').value);
   if (!project) return;
-  $('repo').value = project.repository;
+  $('repo').value = project.repository || project.repositoryPath || '';
   $('base').value = project.baseBranch || '';
-  $('target').value = project.prTarget || project.baseBranch || '';
-  $('sandbox').textContent = `Sandbox: ${project.sandbox}`;
+  $('target').value = project.prTarget || project.prTargetBranch || project.baseBranch || '';
+  $('sandbox').textContent = `Sandbox: ${project.sandbox || '-'}`;
+  const reason = project.blockingReason || (project.status === 'ready' ? 'ready' : project.status);
+  $('projectStatus').textContent = `Project status: ${reason}`;
+  $('run').disabled = project.status !== 'ready';
+  $('runReason').textContent = project.status === 'ready' ? '' : `RUN disabled: ${reason}`;
 }
 
 async function start() {
+  const project = (window.projects || []).find((item) => item.id === $('project').value);
+  if (!project || project.status !== 'ready') {
+    fillProject();
+    return;
+  }
   const payload = {
     projectId: $('project').value,
     task: $('task').value,
@@ -54,12 +82,12 @@ async function start() {
   runId = result.runId;
   started = Date.now();
   $('runNo').textContent = `RUN #${runId || '-'}`;
-  await refresh();
+  await refreshRun();
 }
 
 async function stop() {
   if (runId) await api(`/api/runs/${runId}/stop`, { method: 'POST' });
-  await refresh();
+  await refreshRun();
 }
 
 async function view(outputPath) {
@@ -103,7 +131,7 @@ function renderTimelineRows() {
   renderCurrentStep();
 }
 
-async function refresh() {
+async function refreshRun() {
   if (!runId) return;
   const state = await api(`/api/runs/${runId}`);
   $('status').textContent = state.status;
@@ -119,18 +147,30 @@ async function refresh() {
     + (system.finalExport ? `<div class="final">Final export:<br>${system.finalExport.label} <a data-copy="${system.finalExport.path}">/copy/</a> <a data-view="${system.finalExport.path}">/view/</a></div>` : '<div class="pending">FINAL EXPORT pending</div>');
 }
 
+async function refreshAll() {
+  await loadProjects();
+  await refreshRun();
+}
+
 document.body.addEventListener('click', (event) => {
   const target = event.target;
   if (target.dataset.view) view(target.dataset.view);
   if (target.dataset.copy) navigator.clipboard?.writeText(target.dataset.copy);
 });
 
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'F2') {
+    event.preventDefault();
+    refreshAll().catch((error) => { $('runReason').textContent = error.message; });
+  }
+});
+
 $('project').onchange = fillProject;
 $('run').onclick = start;
 $('stop').onclick = stop;
-setInterval(refresh, 1500);
+setInterval(refreshRun, 1500);
 setInterval(() => {
   spinnerIndex = (spinnerIndex + 1) % spinnerFrames.length;
   renderTimelineRows();
 }, 200);
-loadProjects().catch((error) => { $('viewer').textContent = error.message; });
+refreshAll().catch((error) => { $('runReason').textContent = error.message; });
