@@ -1,4 +1,6 @@
 import { mkdtemp, mkdir, readFile, writeFile, readdir } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -17,12 +19,59 @@ const brief: TaskBrief = {
   riskLevel: "standard",
 };
 
+
+const execFileAsync = promisify(execFile);
+const gitExecutable = "/nix/store/v2rxk9xkcxsas64wl7ds31al15cm2wqd-git-2.50.1/bin/git";
+process.env.CATOS_GIT_EXECUTABLE = gitExecutable;
+
+async function initializeGitRepository(repositoryPath: string): Promise<void> {
+  await mkdir(repositoryPath, { recursive: true });
+
+  await writeFile(
+    path.join(repositoryPath, "README.md"),
+    "# Demo\n",
+    "utf8",
+  );
+
+  await execFileAsync(gitExecutable, ["init"], {
+    cwd: repositoryPath,
+  });
+
+  await execFileAsync(
+    "git",
+    ["config", "user.name", "CatOS Test"],
+    { cwd: repositoryPath },
+  );
+
+  await execFileAsync(
+    "git",
+    ["config", "user.email", "catos-test@example.invalid"],
+    { cwd: repositoryPath },
+  );
+
+  await execFileAsync(gitExecutable, ["add", "."], {
+    cwd: repositoryPath,
+  });
+
+  await execFileAsync(
+    "git",
+    ["commit", "-m", "initial"],
+    { cwd: repositoryPath },
+  );
+
+  await execFileAsync(
+    "git",
+    ["branch", "-M", "main"],
+    { cwd: repositoryPath },
+  );
+}
+
 describe("runCommand", () => {
   it("runs Task Analyst, Coding Worker, Validation Runner, Reviewer, and writes review-report.json", async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), "catos-cli-"));
     const runsDir = path.join(cwd, "runs");
     await mkdir(path.join(cwd, "projects"));
-    await mkdir(path.join(cwd, "demo-project"));
+    await initializeGitRepository(path.join(cwd, "demo-project"));
     await writeFile(
       path.join(cwd, "projects", "demo.yaml"),
       `project:\n  id: demo\n  name: Demo project\n  repoPath: ../demo-project\n  baseBranch: main\ncommands:\n  typecheck: npm run typecheck\n  test: npm run test\n  build: npm run build\nworkflow:\n  maxReworkAttempts: 2\n  createCommit: false\npermissions:\n  allowNetwork: false\n  allowPush: false\n  allowMerge: false\n`,
@@ -38,7 +87,7 @@ describe("runCommand", () => {
         return {
           threadId: "thread-cli",
           finalResponse: "fake worker done",
-          workspacePath: path.join(input.workspaceRoot, input.runId, "workspace"),
+          workspacePath: await createMockWorkspace(input),
           changedFiles: ["README.md"],
           diff: "diff --git a/README.md b/README.md\n",
           status: " M README.md\n",
@@ -117,13 +166,15 @@ describe("runCommand", () => {
     expect(timeline.map((event) => event.event)).toEqual([
       "session.created",
       "step.created",
+      "git.base_resolved",
       "step.status_changed",
       "attempt.started",
+      "git.run_branch_created",
       "step.status_changed",
       "attempt.completed",
     ]);
 
-    expect(timeline[2]).toMatchObject({
+    expect(timeline[3]).toMatchObject({
       event: "step.status_changed",
       metadata: {
         from: "open",
@@ -131,7 +182,7 @@ describe("runCommand", () => {
       },
     });
 
-    expect(timeline[4]).toMatchObject({
+    expect(timeline[6]).toMatchObject({
       event: "step.status_changed",
       metadata: {
         from: "running",
@@ -146,7 +197,7 @@ async function setupRunFixture(maxReworkAttempts = 2) {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "catos-rework-cli-"));
   const runsDir = path.join(cwd, "runs");
   await mkdir(path.join(cwd, "projects"));
-  await mkdir(path.join(cwd, "demo-project"));
+  await initializeGitRepository(path.join(cwd, "demo-project"));
   await writeFile(
     path.join(cwd, "projects", "demo.yaml"),
     `project:\n  id: demo\n  name: Demo project\n  repoPath: ../demo-project\n  baseBranch: main\ncommands:\n  typecheck: npm run typecheck\n  test: npm run test\n  build: npm run build\nworkflow:\n  maxReworkAttempts: ${maxReworkAttempts}\n  createCommit: false\npermissions:\n  allowNetwork: false\n  allowPush: false\n  allowMerge: false\n`,
@@ -166,6 +217,44 @@ function codingResult(threadId: string, workspacePath: string, label: string): C
     sandboxMode: "workspace-write",
     sandboxIsolation: "enabled",
   };
+}
+
+
+async function createMockWorkspace(input: {
+  repositoryPath: string;
+  workspaceRoot: string;
+  runId: string;
+  runBranch?: string;
+  baseCommit?: string;
+  baseBranch: string;
+}): Promise<string> {
+  const workspacePath = path.join(
+    input.workspaceRoot,
+    input.runId,
+    "workspace",
+  );
+
+  const runBranch = input.runBranch ?? `catos/${input.runId}`;
+  const baseRef = input.baseCommit ?? input.baseBranch;
+
+  await mkdir(path.dirname(workspacePath), { recursive: true });
+
+  await execFileAsync(
+    gitExecutable,
+    [
+      "worktree",
+      "add",
+      "-b",
+      runBranch,
+      workspacePath,
+      baseRef,
+    ],
+    {
+      cwd: input.repositoryPath,
+    },
+  );
+
+  return workspacePath;
 }
 
 function validationRunnerWith(statuses: Array<"PASS" | "FAIL" | "BLOCKED">): ValidationRunner {
@@ -202,7 +291,7 @@ describe("runCommand rework loop", () => {
     const { cwd, runsDir } = await setupRunFixture();
     const provider: TaskAnalystProvider = { analyze: async () => brief };
     const codingWorker: CodingWorker = {
-      executeTask: async (input) => codingResult("thread-1", path.join(input.workspaceRoot, input.runId, "workspace"), "initial"),
+      executeTask: async (input) => codingResult("thread-1", await createMockWorkspace(input), "initial"),
       continueTask: async () => { throw new Error("unexpected rework"); },
     };
     const reviewerProvider: ReviewerProvider = { review: async () => review("HUMAN_REQUIRED") };
@@ -219,7 +308,7 @@ describe("runCommand rework loop", () => {
     const continueInputs: ReworkCodingTask[] = [];
     const validationCalls: string[] = [];
     const codingWorker: CodingWorker = {
-      executeTask: async (input) => codingResult("thread-1", path.join(input.workspaceRoot, input.runId, "workspace"), "initial"),
+      executeTask: async (input) => codingResult("thread-1", await createMockWorkspace(input), "initial"),
       continueTask: async (input) => { continueInputs.push(input); return codingResult(input.threadId, input.workspacePath, "rework"); },
     };
     const baseValidationRunner = validationRunnerWith(["FAIL", "PASS"]);
@@ -260,7 +349,7 @@ describe("runCommand rework loop", () => {
   it("stops after rework returns HUMAN_REQUIRED", async () => {
     const { cwd, runsDir } = await setupRunFixture();
     const provider: TaskAnalystProvider = { analyze: async () => brief };
-    const codingWorker: CodingWorker = { executeTask: async (input) => codingResult("thread-1", path.join(input.workspaceRoot, input.runId, "workspace"), "initial"), continueTask: async (input) => codingResult(input.threadId, input.workspacePath, "rework") };
+    const codingWorker: CodingWorker = { executeTask: async (input) => codingResult("thread-1", await createMockWorkspace(input), "initial"), continueTask: async (input) => codingResult(input.threadId, input.workspacePath, "rework") };
     let reviewCall = 0;
     const reviewerProvider: ReviewerProvider = { review: async () => reviewCall++ === 0 ? review("REWORK") : review("HUMAN_REQUIRED") };
     await runCommand(["--project", "demo", "--task", "Test task"], { cwd, runsDir, taskAnalystProvider: provider, codingWorker, validationRunner: validationRunnerWith(["FAIL", "FAIL"]), reviewerProvider });
@@ -273,7 +362,7 @@ describe("runCommand rework loop", () => {
   it("returns REWORK_LIMIT_REACHED when max rework attempts are exhausted", async () => {
     const { cwd, runsDir } = await setupRunFixture(1);
     const provider: TaskAnalystProvider = { analyze: async () => brief };
-    const codingWorker: CodingWorker = { executeTask: async (input) => codingResult("thread-1", path.join(input.workspaceRoot, input.runId, "workspace"), "initial"), continueTask: async (input) => codingResult(input.threadId, input.workspacePath, "rework") };
+    const codingWorker: CodingWorker = { executeTask: async (input) => codingResult("thread-1", await createMockWorkspace(input), "initial"), continueTask: async (input) => codingResult(input.threadId, input.workspacePath, "rework") };
     let i = 0;
     const reviewerProvider: ReviewerProvider = { review: async () => review("REWORK", `finding-${++i}`) };
     await runCommand(["--project", "demo", "--task", "Test task"], { cwd, runsDir, taskAnalystProvider: provider, codingWorker, validationRunner: validationRunnerWith(["FAIL", "FAIL"]), reviewerProvider });
@@ -288,7 +377,7 @@ describe("runCommand rework loop", () => {
       const { cwd, runsDir } = await setupRunFixture(2);
       const provider: TaskAnalystProvider = { analyze: async () => brief };
       let continueCount = 0;
-      const codingWorker: CodingWorker = { executeTask: async (input) => codingResult("thread-1", path.join(input.workspaceRoot, input.runId, "workspace"), "initial"), continueTask: async (input) => { continueCount += 1; return codingResult(input.threadId, input.workspacePath, `rework${continueCount}`); } };
+      const codingWorker: CodingWorker = { executeTask: async (input) => codingResult("thread-1", await createMockWorkspace(input), "initial"), continueTask: async (input) => { continueCount += 1; return codingResult(input.threadId, input.workspacePath, `rework${continueCount}`); } };
       let call = 0;
       const reviewerProvider: ReviewerProvider = { review: async () => {
         call += 1;
@@ -307,7 +396,7 @@ describe("runCommand rework loop", () => {
     const { cwd, runsDir } = await setupRunFixture(2);
     const provider: TaskAnalystProvider = { analyze: async () => brief };
     let continueCount = 0;
-    const codingWorker: CodingWorker = { executeTask: async (input) => codingResult("thread-1", path.join(input.workspaceRoot, input.runId, "workspace"), "initial"), continueTask: async (input) => codingResult(input.threadId, input.workspacePath, `rework${++continueCount}`) };
+    const codingWorker: CodingWorker = { executeTask: async (input) => codingResult("thread-1", await createMockWorkspace(input), "initial"), continueTask: async (input) => codingResult(input.threadId, input.workspacePath, `rework${++continueCount}`) };
     let i = 0;
     const reviewerProvider: ReviewerProvider = { review: async () => review("REWORK", `finding-${++i}`) };
     await runCommand(["--project", "demo", "--task", "Test task"], { cwd, runsDir, taskAnalystProvider: provider, codingWorker, validationRunner: validationRunnerWith(["FAIL", "FAIL", "FAIL"]), reviewerProvider });

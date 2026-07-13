@@ -567,7 +567,14 @@ export class CodexSdkWorker implements CodingWorker {
   async executeTask(input: CodingTask): Promise<CodingResult> {
     const repositoryPath = path.resolve(input.repositoryPath);
     await this.git(["rev-parse", "--is-inside-work-tree"], repositoryPath);
-    const baseCommit = input.baseCommit ?? await this.git(["rev-parse", `${input.baseBranch}^{commit}`], repositoryPath);
+    const baseCommit =
+      input.baseCommit ??
+      (
+        await this.git(
+          ["rev-parse", "--verify", `${input.baseBranch}^{commit}`],
+          repositoryPath,
+        )
+      ).stdout.trim();
     await this.git(["cat-file", "-e", `${baseCommit}^{commit}`], repositoryPath);
 
     const branchName = input.runBranch ?? normalizeWorkBranchName(input.runId);

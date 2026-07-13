@@ -6,7 +6,7 @@ import { loadSession, readJson, appendTimelineEvent, type SessionGitContext } fr
 import type { CommitResult } from "./commitWorker.js";
 
 const execFileAsync = promisify(execFile);
-async function git(cwd: string, args: string[]): Promise<string> { const { stdout } = await execFileAsync("git", args, { cwd, encoding: "utf8", maxBuffer: 20*1024*1024 }); return stdout.trimEnd(); }
+async function git(cwd: string, args: string[]): Promise<string> { const { stdout } = await execFileAsync(process.env.CATOS_GIT_EXECUTABLE ?? "git", args, { cwd, encoding: "utf8", maxBuffer: 20*1024*1024 }); return stdout.trimEnd(); }
 export function sanitizeRemoteUrl(url: string): string { return url.replace(/^(https?:\/\/)([^/@\s]+)@/i, "$1"); }
 export function shellQuote(v: string): string { return `"${v.replace(/(["\\$`])/g, "\\$1")}"`; }
 
