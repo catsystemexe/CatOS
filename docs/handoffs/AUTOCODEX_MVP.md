@@ -266,6 +266,41 @@ Každý běh vytvoří runtime manifest obsahující:
 * credentials policy
 * network policy
 
+Aktuální MVP zapisuje `runtime/runtime.json` jako sourozence pracovního
+`workspace` adresáře pro počáteční běh i rework attempt. Manifest obsahuje
+pouze názvy předaných environment proměnných, nikdy jejich hodnoty.
+Zaznamenává také absolutní `realpath` workspace, povolený workspace root,
+dočasné `HOME` a `TMPDIR`, stav odstranění GitHub credentials a SSH agenta,
+`GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_SYSTEM=/dev/null` a
+`GIT_TERMINAL_PROMPT=0`.
+
+Síťová izolace není v Replitu v tomto MVP vynucena. Runtime manifest proto
+uvádí síťový stav jako `unrestricted`; bezpečnostní hranice MVP stojí na
+Workspace Guardu, environment allowlistu, credential scrubbingu, auditu a
+Human Gate.
+
+Codex SDK neběží v hlavním coordinator procesu CatOS. Coordinator vytvoří
+samostatný Codex runtime child process a předá mu pouze explicitní allowlist
+environmentu. Globální `process.env` hlavního procesu se kvůli spuštění
+Codexu nepřepisuje ani dočasně nemutuje. `OPENAI_API_KEY` a `OPENAI_BASE_URL`
+jsou v tomto MVP ponechány jako důvěryhodné credentials dostupné Codex
+procesu pro současný způsob autentizace; nejde tedy o izolaci těchto konkrétních
+OpenAI credentials od Codex procesu. Manifest nadále zapisuje pouze názvy
+proměnných, nikdy jejich hodnoty.
+
+Runtime child má výchozí timeout 30 minut na attempt; lze ho změnit pomocí
+`CATOS_CODEX_RUNTIME_TIMEOUT_MS`. Stdout a stderr child procesu jsou oddělené
+od IPC výsledku a ukládají se do `runtime/codex-runtime.stdout.log` a
+`runtime/codex-runtime.stderr.log` s limitem 1 MiB na stream. Při chybě se
+zapíše také `runtime/codex-runtime-error.json` s důvodem bez hodnot secrets.
+
+Danger Full Access Policy
+
+`danger-full-access` nesmí být tichý fallback. Musí být explicitně nastaven
+v konfiguraci a potvrzen pomocí `codex.acknowledgeNoSandbox: true`. Pokud je
+zapnutý, runtime manifest uvádí `sandboxIsolation: disabled`; CatOS přitom
+nadále zachovává Human Gate, nepřidává push, PR ani merge.
+
 ⸻
 
 Audit Model
