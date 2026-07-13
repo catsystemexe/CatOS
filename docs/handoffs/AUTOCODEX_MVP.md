@@ -438,3 +438,20 @@ AutoCodex je první produkt postavený nad CatOS.
 Jeho úkolem není nahradit vývojáře.
 
 Jeho úkolem je odstranit mechanickou práci, zachovat auditovatelnost a umožnit efektivní spolupráci mezi člověkem, ChatGPT a AI coding agentem.
+
+⸻
+
+Implemented session step model note
+
+A session records exactly one active logical step through `activeStepId`. New steps are explicit and append-only: `step` creates `steps/NNN-<stepId>/step.json`, `request.md`, appends `step.created`, and makes the new step active.
+
+Minimal step status transitions:
+
+* `open → running → awaiting_decision`
+* `awaiting_decision → accepted` for `accept`
+* `awaiting_decision → rejected` for `reject` or `abort`
+* `awaiting_decision → open` for `retry`
+* `awaiting_decision → superseded` for `revise`
+* `open|running|awaiting_decision → superseded` only when `step --supersede-current` is used
+
+The implemented rule for `revise` is conservative: it closes the current step as `superseded` and clears the active step so the next logical request must be created explicitly with `step`. Rework attempts never create a new step automatically; they attach to the current `activeStepId` and are rejected when there is no active step or the target step is already closed.
