@@ -26,12 +26,65 @@ async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", args, { cwd, encoding: "utf8", maxBuffer: 50 * 1024 * 1024 });
   return stdout.trimEnd();
 }
+async function gitBuffer(cwd: string, args: string[]): Promise<Buffer> {
+  const { stdout } = await execFileAsync("git", args, { cwd, encoding: "buffer", maxBuffer: 50 * 1024 * 1024 });
+  return stdout as Buffer;
+}
+async function gitExitCode(cwd: string, args: string[]): Promise<number> {
+  try {
+    await execFileAsync("git", args, { cwd, encoding: "buffer", maxBuffer: 50 * 1024 * 1024 });
+    return 0;
+  } catch (error) {
+    const maybeError = error as { code?: number | string };
+    return typeof maybeError.code === "number" ? maybeError.code : Number(maybeError.code ?? 1);
+  }
+}
 function normPath(p: string): string { return p.replace(/\\/g, "/").replace(/^\.\//, ""); }
 function sortUnique(xs: string[]): string[] { return [...new Set(xs.map(normPath).filter(Boolean))].sort(); }
-function nameOnlyFiles(out: string): string[] { return sortUnique(out.split("\n")); }
+function parseNulFields(out: Buffer): string[] { return out.toString("utf8").split("\0").filter(Boolean); }
+function parseNameStatusZ(out: Buffer): Map<string, string> {
+  const fields = parseNulFields(out);
+  const result = new Map<string, string>();
+  for (let index = 0; index < fields.length;) {
+    const status = fields[index++]!;
+    if (status.startsWith("R") || status.startsWith("C")) {
+      index += 1;
+      result.set(normPath(fields[index++] ?? ""), status[0]!);
+    } else {
+      result.set(normPath(fields[index++] ?? ""), status[0]!);
+    }
+  }
+  return result;
+}
 function sameFiles(a: string[], b: string[]): boolean { return JSON.stringify(sortUnique(a)) === JSON.stringify(sortUnique(b)); }
 function defaultMessage(input: CommitInput): string { return `catos: apply approved changes for ${input.runId}`; }
 async function ensureFile(filePath: string, label: string): Promise<void> { const s = await stat(filePath).catch(() => undefined); if (!s?.isFile()) throw new Error(`Missing ${label}: ${filePath}`); }
+
+export async function verifyStagedIndexMatchesWorkspace(workspace: string, approvedFiles: string[]): Promise<void> {
+  const approved = sortUnique(approvedFiles);
+  const stagedStatuses = parseNameStatusZ(await gitBuffer(workspace, ["diff", "--cached", "--name-status", "-z", "HEAD"]));
+  const stagedFiles = sortUnique([...stagedStatuses.keys()]);
+
+  if (!sameFiles(stagedFiles, approved)) throw new Error("Staged files do not match approved files.");
+  if (await gitExitCode(workspace, ["diff", "--quiet"]) !== 0) throw new Error("Unstaged changes remain after staging.");
+  if (parseNulFields(await gitBuffer(workspace, ["ls-files", "--others", "--exclude-standard", "-z"])).length > 0) throw new Error("Untracked files remain after staging.");
+
+  for (const filePath of approved) {
+    const status = stagedStatuses.get(filePath);
+    if (!status) throw new Error(`Approved file is missing from staged index: ${filePath}`);
+
+    if (status === "D") {
+      const fileStat = await stat(path.join(workspace, filePath)).catch(() => undefined);
+      if (fileStat) throw new Error(`Deleted file still exists in workspace: ${filePath}`);
+      continue;
+    }
+
+    if (status !== "A" && status !== "M") throw new Error(`Unsupported staged status for approved file ${filePath}: ${status}`);
+    const workspaceContent = await readFile(path.join(workspace, filePath));
+    const stagedContent = await gitBuffer(workspace, ["show", `:${filePath}`]);
+    if (!stagedContent.equals(workspaceContent)) throw new Error(`Staged content does not match workspace file: ${filePath}`);
+  }
+}
 
 export class GitCommitWorker implements CommitWorker {
   async commit(input: CommitInput): Promise<CommitResult> {
@@ -68,9 +121,13 @@ export class GitCommitWorker implements CommitWorker {
     const parentCommitSha = await git(workspace, ["rev-parse", "HEAD"]);
 
     await git(workspace, ["add", "--all"]);
-    const stagedDiff = await git(workspace, ["diff", "--cached", "--binary", "HEAD"]);
-    const stagedFiles = nameOnlyFiles(await git(workspace, ["diff", "--cached", "--name-only"]));
-    if (sha256Text(stagedDiff) !== sha256Text(approvedDiff) || !sameFiles(stagedFiles, input.finalResult.finalChangedFiles)) { await git(workspace, ["reset"]); throw new Error("Staged diff does not match approved diff; reset completed."); }
+    try {
+      await verifyStagedIndexMatchesWorkspace(workspace, input.finalResult.finalChangedFiles);
+    } catch (error) {
+      await git(workspace, ["reset"]);
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Staged index does not match approved workspace state; reset completed. ${message}`);
+    }
     const name = input.config?.git?.commitName ?? process.env.CATOS_GIT_NAME ?? "CatOS";
     const email = input.config?.git?.commitEmail ?? process.env.CATOS_GIT_EMAIL ?? "catos@local.invalid";
     const commitMessage = input.message?.trim() || defaultMessage(input);
