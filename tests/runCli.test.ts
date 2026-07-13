@@ -114,10 +114,32 @@ describe("runCommand", () => {
     const session = JSON.parse(await readFile(path.join(runsDir, runDirs[0]!, "session.json"), "utf8"));
     expect(session.runId).toBe(runDirs[0]);
     const timeline = (await readFile(path.join(runsDir, runDirs[0]!, "timeline.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
-    expect(timeline.map((event) => event.event)).toEqual(["session.created", "step.created", "attempt.started", "attempt.completed"]);
-  });
-});
+    expect(timeline.map((event) => event.event)).toEqual([
+      "session.created",
+      "step.created",
+      "step.status_changed",
+      "attempt.started",
+      "step.status_changed",
+      "attempt.completed",
+    ]);
 
+    expect(timeline[2]).toMatchObject({
+      event: "step.status_changed",
+      metadata: {
+        from: "open",
+        to: "running",
+      },
+    });
+
+    expect(timeline[4]).toMatchObject({
+      event: "step.status_changed",
+      metadata: {
+        from: "running",
+        to: "awaiting_decision",
+      },
+    });
+  });
+  });
 type ReviewVerdict = "ACCEPT" | "REWORK" | "HUMAN_REQUIRED";
 
 async function setupRunFixture(maxReworkAttempts = 2) {
