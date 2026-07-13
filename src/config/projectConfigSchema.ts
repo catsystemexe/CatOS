@@ -30,6 +30,10 @@ export const projectConfigSchema = z.object({
     sandboxMode: sandboxModeSchema.default("workspace-write"),
     acknowledgeNoSandbox: z.boolean().optional().default(false),
   }).default({ sandboxMode: "workspace-write", acknowledgeNoSandbox: false }),
+  git: z.object({
+    commitName: z.string().min(1).optional(),
+    commitEmail: z.string().email().optional(),
+  }).default({}),
   validation: z.object({
     timeoutMs: z.number().int().positive().default(120_000),
   }).default({ timeoutMs: 120_000 }),
