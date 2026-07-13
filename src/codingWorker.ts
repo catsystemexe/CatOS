@@ -2,6 +2,7 @@ import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import type { ReworkPackage } from "./schemas/reworkPackage.js";
 import path from "node:path";
 import { execFile } from "node:child_process";
+import { collectWorkspaceGitState } from "./gitWorkspaceState.js";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -43,12 +44,6 @@ export interface CodingWorker {
 
 type GitResult = { stdout: string; stderr: string };
 
-type ChangedFileEntry = {
-  path: string;
-  status: string;
-  untracked: boolean;
-};
-
 type CodexThread = {
   id?: string;
   threadId?: string;
@@ -81,7 +76,7 @@ export function normalizeWorkBranchName(runId: string): string {
     .replace(/[^A-Za-z0-9._/-]+/g, "-")
     .replace(/\.\.+/g, ".")
     .replace(/\/+/g, "/")
-    .replace(/^[/.-]+|[/.-]+$/g, "")
+    .replace(/^[\/.-]+|[\/.-]+$/g, "")
     .replace(/\.lock$/i, "");
   const safeRunId = normalized.length > 0 ? normalized : "run";
   return `catos/${safeRunId}`.slice(0, 200).replace(/[/.-]+$/g, "");
@@ -192,60 +187,6 @@ export function buildReworkCodexInstruction(reworkPackage: ReworkPackage): strin
   ].join("\n");
 }
 
-function parseStatusPorcelainZ(status: string): ChangedFileEntry[] {
-  const tokens = status.split("\0").filter(Boolean);
-  const entries: ChangedFileEntry[] = [];
-
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index]!;
-    const statusCode = token.slice(0, 2);
-    const filePath = token.slice(3);
-
-    entries.push({
-      path: filePath,
-      status: statusCode,
-      untracked: statusCode === "??",
-    });
-
-    if (statusCode.includes("R") || statusCode.includes("C")) {
-      index += 1;
-    }
-  }
-
-  return entries;
-}
-
-function isExpectedNoIndexDifference(error: unknown): boolean {
-  const maybeError = error as { code?: number | string };
-  return maybeError.code === 1 || maybeError.code === "1";
-}
-
-async function gitNoIndexDiff(filePath: string, cwd: string): Promise<string> {
-  try {
-    const { stdout } = await execFileAsync("git", ["diff", "--binary", "--no-index", "--", "/dev/null", filePath], { cwd, encoding: "utf8", maxBuffer: 20 * 1024 * 1024 });
-    return stdout;
-  } catch (error) {
-    const err = error as Error & { stdout?: string; stderr?: string };
-    if (isExpectedNoIndexDifference(error)) {
-      return err.stdout ?? "";
-    }
-
-    const message = [err.message, err.stderr, err.stdout].filter(Boolean).join("\n");
-    throw new Error(`Git command failed: git diff --binary --no-index -- /dev/null ${filePath}\n${message}`);
-  }
-}
-
-async function buildWorkspaceDiff(workspacePath: string, changedFiles: ChangedFileEntry[], git: (args: string[], cwd?: string) => Promise<GitResult>): Promise<string> {
-  const trackedDiff = await git(["diff", "--binary", "HEAD"], workspacePath);
-  const untrackedDiffs = await Promise.all(
-    changedFiles
-      .filter((entry) => entry.untracked)
-      .map((entry) => gitNoIndexDiff(entry.path, workspacePath)),
-  );
-
-  return [trackedDiff.stdout, ...untrackedDiffs].filter(Boolean).join("\n");
-}
-
 function stringifyCodexTurn(turn: unknown): string {
   if (typeof turn === "string") return turn;
   if (turn && typeof turn === "object") {
@@ -285,17 +226,14 @@ export class CodexSdkWorker implements CodingWorker {
   }
 
   private async collectResult(input: { threadId: string; finalResponse: string; workspacePath: string; sandboxMode: SandboxMode; sandboxIsolation: SandboxIsolation }): Promise<CodingResult> {
-    const statusOutput = await this.git(["status", "--porcelain=v1", "-z"], input.workspacePath);
-    const changedFileEntries = parseStatusPorcelainZ(statusOutput.stdout);
-    const diff = await buildWorkspaceDiff(input.workspacePath, changedFileEntries, this.git);
-    const humanStatusOutput = await this.git(["status", "--short"], input.workspacePath);
+    const workspaceState = await collectWorkspaceGitState(input.workspacePath, { git: this.git });
     return {
       threadId: input.threadId,
       finalResponse: input.finalResponse,
       workspacePath: input.workspacePath,
-      changedFiles: changedFileEntries.map((entry) => entry.path),
-      diff,
-      status: humanStatusOutput.stdout,
+      changedFiles: workspaceState.changedFiles,
+      diff: workspaceState.diff,
+      status: workspaceState.status,
       sandboxMode: input.sandboxMode,
       sandboxIsolation: input.sandboxIsolation,
     };
