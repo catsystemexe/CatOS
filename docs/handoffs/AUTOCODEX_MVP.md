@@ -506,3 +506,71 @@ Security behavior:
 * Secret-like values are redacted from JSON and Markdown output.
 
 The renderer is idempotent for unchanged source artifacts except for `generatedAt`, which can be injected by tests.
+
+## Continue Package MVP
+
+AutoCodex now separates review/audit handoff from the executable continuation contract. The Review Package remains an audit-oriented, human review artifact. The Continue Package is a deterministic, agent-neutral working contract for exactly the current active step and next coding attempt. It is not an AI summary and is rebuilt from `session.json`, the active `step.json`, `request.md`, ordered attempt artifacts, the last validation/report/decision artifacts, static AutoCodex policy constraints, and whitelisted runtime metadata only.
+
+Generated artifacts live under:
+
+```text
+runs/<sessionId>/continue/
+  continue-package.json
+  continue-package.md
+  codex-prompt.md
+```
+
+`continue-package.json` is the stable machine-readable contract. `continue-package.md` is a human-readable rendering of the same fields. `codex-prompt.md` is a Codex-specific renderer produced from the neutral contract.
+
+CLI usage:
+
+```bash
+npm run catos -- continue-package --run <sessionId>
+npm run catos -- continue --run <sessionId>
+```
+
+The command prints the session, active step, previous attempt count, continue reason, artifact paths, and the recommended next command:
+
+```bash
+npm run catos -- run-step --run <sessionId> --prompt-file runs/<sessionId>/continue/codex-prompt.md
+```
+
+`run-step` regenerates the Continue Package and Codex prompt by default, uses the prompt for the new attempt, and stores an exact prompt copy in the attempt audit directory. The current smoke/integration path supports `--fake-child` for deterministic child-run testing without invoking an external Codex runtime.
+
+### Continue reason rules
+
+Reasons are deterministic and evaluated with this priority:
+
+1. no active-step attempts: `initial-step`
+2. last attempt failed, timed out, or reports runtime error/timeout: `runtime-failure`
+3. latest decision is retry: `retry`
+4. latest decision is revise: `revise`
+5. latest review verdict is `REWORK`: `review-rework`
+6. latest validation is `FAIL` or `BLOCKED`: `validation-failure`
+7. later explicit open step without failures: `manual-follow-up`
+8. otherwise: `retry`
+
+Fresh steps therefore contain the session goal, current step request, and constraints without fabricated previous failures. Retries include only previous attempts and findings for the same active step, so findings from closed steps are not carried into the next step.
+
+### Security and determinism policy
+
+Continue artifacts apply the same or stricter redaction policy as review handoff artifacts: OpenAI/GitHub/Slack-style tokens and known test secret values are replaced with `[REDACTED]`. Full logs, full diffs, arbitrary environment values, credentials, and unfiltered runtime manifests are not embedded. Runtime metadata is included only through existing attempt fields and artifact references.
+
+Previous attempt summaries are chronological and limited to the last five attempts for the active step; the omitted count is recorded in `execution.omittedPreviousAttempts`. Findings, constraints, validation commands, relevant files, and artifact references are deduplicated and sorted deterministically. Tests can inject `generatedAt` by calling the builder with a fixed clock.
+
+### Codex prompt renderer
+
+`renderCodexPrompt(pkg)` converts the agent-neutral contract into working instructions with these sections:
+
+- Session Goal
+- Current Step
+- Task
+- Why This Attempt Exists
+- Previous Attempt Results
+- Required Changes
+- Constraints
+- Relevant Files
+- Validation
+- Output Requirements
+
+The output requirements explicitly forbid push, merge, and audit artifact deletion, and require a concise change summary, changed files, validation results, and known limitations.
