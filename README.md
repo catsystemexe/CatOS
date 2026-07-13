@@ -221,7 +221,7 @@ Human Gate při `APPROVE` ukládá SHA-256 fingerprinty schváleného finálníh
 }
 ```
 
-Commit Worker před commitem znovu počítá fingerprinty těchto artefaktů a porovnává aktuální `git diff --binary HEAD` s finálním schváleným diffem z `final-result.json`. Git preflight dále ověřuje přesný Git top-level workspace, nedetached větev s prefixem `catos/`, neprázdný working tree a deterministicky porovnaný seznam změněných souborů proti `finalResult.finalChangedFiles`. Po `git add --all` se znovu kontroluje staged diff a staged file list; při nesouladu se provede bezpečný `git reset` a commit se nevytvoří.
+Commit Worker před commitem znovu počítá fingerprinty těchto artefaktů a porovnává aktuální kompletní workspace diff s finálním schváleným diffem z `final-result.json`. Kompletní diff používá stejný sdílený kanonický algoritmus jako Coding Worker: `git diff --binary HEAD` pro tracked změny, bezpečně parsovaný `git status --porcelain=v1 -z` pro untracked soubory a pro každý z nich `git diff --binary --no-index -- /dev/null <file>` v deterministickém pořadí. Git preflight dále ověřuje přesný Git top-level workspace, nedetached větev s prefixem `catos/`, neprázdný working tree a deterministicky porovnaný kompletní seznam změněných souborů včetně untracked souborů proti `finalResult.finalChangedFiles`. Po `git add --all` se znovu kontroluje `git diff --cached --binary HEAD` a staged file list; při nesouladu se provede bezpečný `git reset` a commit se nevytvoří.
 
 Úspěšný commit zapisuje až po dokončení a ověření čistého working tree artefakt:
 

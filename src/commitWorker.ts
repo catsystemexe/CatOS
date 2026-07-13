@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { ProjectConfig } from "./config/projectConfigSchema.js";
 import { sha256File, sha256Text, type ApprovedEvidence } from "./hashArtifacts.js";
 import { resolveRunArtifact } from "./humanGate.js";
+import { collectWorkspaceGitState } from "./gitWorkspaceState.js";
 import type { FinalResult } from "./schemas/finalResult.js";
 import type { HumanDecision } from "./schemas/humanDecision.js";
 import type { TaskBrief } from "./schemas/taskBrief.js";
@@ -27,7 +28,6 @@ async function git(cwd: string, args: string[]): Promise<string> {
 }
 function normPath(p: string): string { return p.replace(/\\/g, "/").replace(/^\.\//, ""); }
 function sortUnique(xs: string[]): string[] { return [...new Set(xs.map(normPath).filter(Boolean))].sort(); }
-function statusFiles(status: string): string[] { return sortUnique(status.split("\n").filter(Boolean).map((l) => normPath((l.startsWith("R") || l.startsWith("C")) ? l.slice(3).split(" -> ").pop() ?? "" : l.slice(3)))); }
 function nameOnlyFiles(out: string): string[] { return sortUnique(out.split("\n")); }
 function sameFiles(a: string[], b: string[]): boolean { return JSON.stringify(sortUnique(a)) === JSON.stringify(sortUnique(b)); }
 function defaultMessage(input: CommitInput): string { return `catos: apply approved changes for ${input.runId}`; }
@@ -59,19 +59,18 @@ export class GitCommitWorker implements CommitWorker {
     const branch = await git(workspace, ["branch", "--show-current"]);
     if (!branch) throw new Error("Workspace is in detached HEAD.");
     if (!branch.startsWith("catos/")) throw new Error("Branch must start with catos/.");
-    const status = await git(workspace, ["status", "--porcelain=v1"]);
-    if (!status.trim()) throw new Error("No Git working tree changes to commit.");
-    const changedFiles = statusFiles(status);
+    const workspaceState = await collectWorkspaceGitState(workspace);
+    if (!workspaceState.status.trim()) throw new Error("No Git working tree changes to commit.");
+    const changedFiles = workspaceState.changedFiles;
     if (!sameFiles(changedFiles, input.finalResult.finalChangedFiles)) throw new Error("Changed files do not match final-result.json.");
-    const currentDiff = await git(workspace, ["diff", "--binary", "HEAD"]);
     const approvedDiff = await readFile(diffPath, "utf8");
-    if (sha256Text(currentDiff + "\n") !== sha256Text(approvedDiff)) throw new Error("Working diff changed after approval.");
+    if (sha256Text(workspaceState.diff) !== sha256Text(approvedDiff)) throw new Error("Working diff changed after approval.");
     const parentCommitSha = await git(workspace, ["rev-parse", "HEAD"]);
 
     await git(workspace, ["add", "--all"]);
-    const stagedDiff = await git(workspace, ["diff", "--cached", "--binary"]);
+    const stagedDiff = await git(workspace, ["diff", "--cached", "--binary", "HEAD"]);
     const stagedFiles = nameOnlyFiles(await git(workspace, ["diff", "--cached", "--name-only"]));
-    if (sha256Text(stagedDiff + "\n") !== sha256Text(approvedDiff) || !sameFiles(stagedFiles, input.finalResult.finalChangedFiles)) { await git(workspace, ["reset"]); throw new Error("Staged diff does not match approved diff; reset completed."); }
+    if (sha256Text(stagedDiff) !== sha256Text(approvedDiff) || !sameFiles(stagedFiles, input.finalResult.finalChangedFiles)) { await git(workspace, ["reset"]); throw new Error("Staged diff does not match approved diff; reset completed."); }
     const name = input.config?.git?.commitName ?? process.env.CATOS_GIT_NAME ?? "CatOS";
     const email = input.config?.git?.commitEmail ?? process.env.CATOS_GIT_EMAIL ?? "catos@local.invalid";
     const commitMessage = input.message?.trim() || defaultMessage(input);
