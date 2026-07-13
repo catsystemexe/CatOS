@@ -192,6 +192,43 @@ Pravidla Human Gate:
 - `REJECT` může, ale nemusí obsahovat komentář.
 - Příkaz `decide` ověřuje existenci `task-brief.json`, finálního diffu, finálního validation reportu a finálního review reportu. Pro finální artefakty používá cesty z `final-result.json`, pokud jsou dostupné.
 
+
+## Commit Worker
+
+Po jednorázovém lidském `APPROVE` navazuje první verze deterministického Commit Workeru. Není to agent: nepoužívá LLM, nespouští Codex, nemění obsah souborů a nad externím worktree pouze provede bezpečnostní Git preflight a vytvoří lokální commit. Push, GitHub API, pull request a merge zatím nejsou implementované.
+
+CLI příkaz:
+
+```bash
+npm run catos -- commit --run <runId>
+```
+
+Volitelně lze předat deterministickou zprávu commitu bez modelu:
+
+```bash
+npm run catos -- commit --run <runId> --message "docs: add Purpose section"
+```
+
+Commit vznikne pouze když existují validní `input.json`, `task-brief.json`, `final-result.json` a `human-decision.json`, finální stav je `ACCEPTED`, lidské rozhodnutí je `APPROVE`, `runId` sedí a rozhodnutí obsahuje `approvedEvidence` fingerprinty. Starší schválení bez fingerprintů Commit Worker odmítne a vyžaduje nové schválení aktuálním Human Gate.
+
+Human Gate při `APPROVE` ukládá SHA-256 fingerprinty schváleného finálního diffu, validation reportu a review reportu:
+
+```json
+"approvedEvidence": {
+  "diffSha256": "...",
+  "validationReportSha256": "...",
+  "reviewReportSha256": "..."
+}
+```
+
+Commit Worker před commitem znovu počítá fingerprinty těchto artefaktů a porovnává aktuální `git diff --binary HEAD` s finálním schváleným diffem z `final-result.json`. Git preflight dále ověřuje přesný Git top-level workspace, nedetached větev s prefixem `catos/`, neprázdný working tree a deterministicky porovnaný seznam změněných souborů proti `finalResult.finalChangedFiles`. Po `git add --all` se znovu kontroluje staged diff a staged file list; při nesouladu se provede bezpečný `git reset` a commit se nevytvoří.
+
+Úspěšný commit zapisuje až po dokončení a ověření čistého working tree artefakt:
+
+- `runs/<runId>/commit-result.json` – commit SHA, parent SHA, branch, commit message, čas, workspace path, commitované soubory a použité evidence fingerprinty.
+
+Commit Worker je idempotentní. Pokud validní `commit-result.json` už existuje a commit je stále v historii workspace, druhé spuštění nevytvoří další commit. Pokud artefakt existuje, ale commit v Git historii chybí, příkaz skončí chybou a nový commit automaticky nevytváří. Git identita se nastavuje jen lokálně pro samotný `git commit` přes projektovou konfiguraci `git.commitName` / `git.commitEmail`, environment `CATOS_GIT_NAME` / `CATOS_GIT_EMAIL`, nebo bezpečný fallback `CatOS <catos@local.invalid>`.
+
 ## TaskBrief
 
 Task Analyst vrací strukturovaný výstup přibližně ve tvaru:
@@ -213,7 +250,6 @@ Testy používají injected provider, takže nevyžadují skutečné API volán�
 Tato verze záměrně neobsahuje event log, databázi, Temporal, LangGraph ani GitHub automatizaci. Také zatím neumí:
 
 - automaticky opravovat chyby mimo ohraničený `REWORK` loop,
-- vytvářet Git commity v cílovém projektu,
 - pushovat nebo mergovat změny,
 - ukládat stav do databáze,
 - poskytovat webové UI,

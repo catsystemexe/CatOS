@@ -3,6 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 import { finalResultSchema, type FinalResult } from "./schemas/finalResult.js";
 import { humanDecisionSchema, type EvidenceReviewed, type HumanDecision } from "./schemas/humanDecision.js";
+import { sha256File } from "./hashArtifacts.js";
 
 export type HumanGateInput = {
   runId: string;
@@ -57,9 +58,18 @@ export class FileHumanGate implements HumanGate {
     }
 
     await ensureFile(path.join(input.runDir, "task-brief.json"), "task brief");
-    await ensureFile(resolveRunArtifact(input.runDir, input.finalResult.finalDiffPath, "workspace.diff"), "final diff");
-    await ensureFile(resolveRunArtifact(input.runDir, input.finalResult.finalValidationReportPath, "validation-report.json"), "final validation report");
-    await ensureFile(resolveRunArtifact(input.runDir, input.finalResult.finalReviewReportPath, "review-report.json"), "final review report");
+    const diffPath = resolveRunArtifact(input.runDir, input.finalResult.finalDiffPath, "workspace.diff");
+    const validationReportPath = resolveRunArtifact(input.runDir, input.finalResult.finalValidationReportPath, "validation-report.json");
+    const reviewReportPath = resolveRunArtifact(input.runDir, input.finalResult.finalReviewReportPath, "review-report.json");
+    await ensureFile(diffPath, "final diff");
+    await ensureFile(validationReportPath, "final validation report");
+    await ensureFile(reviewReportPath, "final review report");
+
+    const approvedEvidence = decisionInput.decision === "APPROVE" ? {
+      diffSha256: await sha256File(diffPath),
+      validationReportSha256: await sha256File(validationReportPath),
+      reviewReportSha256: await sha256File(reviewReportPath),
+    } : undefined;
 
     const decision = humanDecisionSchema.parse({
       schemaVersion: 1,
@@ -70,6 +80,7 @@ export class FileHumanGate implements HumanGate {
       comment: decisionInput.comment,
       requestedChanges: decisionInput.requestedChanges ?? [],
       evidenceReviewed: decisionInput.evidenceReviewed,
+      approvedEvidence,
     });
 
     await mkdir(input.runDir, { recursive: true });

@@ -108,5 +108,5 @@ export async function decideCommand(args: string[], options: DecideCliOptions = 
     console.log(`Requested changes: ${decision.requestedChanges.length}`);
     console.log("Automatic rework was not started");
   }
-  console.log("Next step: commit is not implemented yet");
+  console.log("Next step: npm run catos -- commit --run <runId>");
 }

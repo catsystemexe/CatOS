@@ -7,6 +7,12 @@ export const evidenceReviewedSchema = z.object({
   reviewReport: z.boolean(),
 });
 
+export const approvedEvidenceSchema = z.object({
+  diffSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  validationReportSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  reviewReportSha256: z.string().regex(/^[a-f0-9]{64}$/),
+});
+
 export const humanDecisionSchema = z.object({
   schemaVersion: z.literal(1),
   runId: z.string().trim().min(1),
@@ -16,10 +22,14 @@ export const humanDecisionSchema = z.object({
   comment: z.string().trim().optional(),
   requestedChanges: z.array(z.string().trim().min(1)),
   evidenceReviewed: evidenceReviewedSchema,
+  approvedEvidence: approvedEvidenceSchema.optional(),
 }).superRefine((decision, ctx) => {
   if (decision.decision === "APPROVE") {
     if (decision.finalResultStatus !== "ACCEPTED") {
       ctx.addIssue({ code: "custom", path: ["decision"], message: "APPROVE is allowed only when finalResultStatus is ACCEPTED." });
+    }
+    if (!decision.approvedEvidence) {
+      ctx.addIssue({ code: "custom", path: ["approvedEvidence"], message: "APPROVE requires approved evidence fingerprints." });
     }
     for (const [key, reviewed] of Object.entries(decision.evidenceReviewed)) {
       if (!reviewed) {
@@ -32,6 +42,7 @@ export const humanDecisionSchema = z.object({
   }
 });
 
+export type ApprovedEvidence = z.infer<typeof approvedEvidenceSchema>;
 export type EvidenceReviewed = z.infer<typeof evidenceReviewedSchema>;
 export type HumanDecision = z.infer<typeof humanDecisionSchema>;
 export type HumanDecisionValue = HumanDecision["decision"];
