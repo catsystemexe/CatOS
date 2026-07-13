@@ -1,3 +1,4 @@
+import { test, expect } from "vitest";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
