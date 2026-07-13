@@ -397,8 +397,8 @@ async function runForkedCodexRuntime(input: { request: CodexRuntimeRequest; env:
     serialization: "json",
     silent: true,
   });
-  let stdout = Buffer.alloc(0);
-  let stderr = Buffer.alloc(0);
+  let stdout: Buffer = Buffer.alloc(0);
+  let stderr: Buffer = Buffer.alloc(0);
   let stdoutTruncated = false;
   let stderrTruncated = false;
   const onStdout = (chunk: Buffer) => {
