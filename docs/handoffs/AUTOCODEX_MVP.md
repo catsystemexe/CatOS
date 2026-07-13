@@ -455,3 +455,54 @@ Minimal step status transitions:
 * `open|running|awaiting_decision → superseded` only when `step --supersede-current` is used
 
 The implemented rule for `revise` is conservative: it closes the current step as `superseded` and clears the active step so the next logical request must be created explicitly with `step`. Rework attempts never create a new step automatically; they attach to the current `activeStepId` and are rejected when there is no active step or the target step is already closed.
+
+⸻
+
+Implemented Review Package note
+
+AutoCodex now provides a deterministic session-level Review Package. It is a derived, human-readable review artifact assembled only from existing audit artifacts; it does not use AI, infer new facts, or rewrite source artifacts.
+
+Generated files:
+
+* `runs/<sessionId>/review/review-package.json` — structured renderer model with `schemaVersion: 1`.
+* `runs/<sessionId>/review/review-package.md` — stable Markdown rendering for human review.
+
+CLI command:
+
+```sh
+npm run catos -- review --run <sessionId>
+```
+
+The command loads `session.json`, ordered `step.json` files, ordered `attempt.json` files, decision history, validation/reviewer/commit artifacts when present, runtime manifests, changed-file metadata, and the timeline summary. It then prints the package paths and concise session state.
+
+The JSON model contains:
+
+* `session` metadata (`sessionId`, goal, status, branch, workspace path, timestamps, active step)
+* aggregate `summary`
+* ordered `steps` with attempts, decisions, and optional `summary.md` path
+* de-duplicated `changedFiles`
+* validation summaries
+* decision history
+* filtered timeline summary
+* known limitations
+* missing/invalid artifacts
+* stable `recommendedNextAction`
+
+`recommendedNextAction` is rule-based and machine-readable. Current values are:
+
+* `abort` — session is aborted
+* `wait` — active step is running
+* `decide` — active step is awaiting a human decision
+* `run-step` — active step is open without attempts, or open after a retry decision
+* `create-step` — session is active and has no active step
+* `commit-or-revise` — session is ready for review and has not been committed
+* `manual-pr` — session is committed or has a commit artifact
+* `inspect` — missing/invalid critical artifacts or otherwise unclear state
+
+Security behavior:
+
+* Environment variable values, API keys, tokens, secrets, SSH credentials, and Git credentials are not copied into the package.
+* Runtime manifests are filtered to allowed variable names, sandbox/isolation/network state, HOME/TMPDIR paths, and credential scrub flags.
+* Secret-like values are redacted from JSON and Markdown output.
+
+The renderer is idempotent for unchanged source artifacts except for `generatedAt`, which can be injected by tests.
