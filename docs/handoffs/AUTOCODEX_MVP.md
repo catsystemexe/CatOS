@@ -657,3 +657,94 @@ branch invariant fails, the status is `blocked` with explicit blocking reasons.
 CatOS does not automatically push, create remote PRs, call the GitHub API, merge,
 manage OAuth, or handle GitHub credentials. The handoff is only metadata for a
 human to push, open a PR, review, and merge manually.
+
+## AutoCodex MVP UI
+
+AutoCodex now includes a minimal local web UI control panel in a retro DOS/Norton Commander style. It is intentionally a thin layer over the existing AutoCodex run/session artifacts and CLI workflow, not a second orchestration engine.
+
+### Layout: SETUP / RUN / VIEWER
+
+Start the UI with:
+
+```bash
+npm run ui
+```
+
+Then open the printed local URL, by default `http://127.0.0.1:8787`.
+
+The page has three fixed panels:
+
+- `SETUP`: project selection, repository display, base branch, PR target, task input, sandbox summary, `RUN`, and `STOP` only while a UI-started run is active.
+- `RUN`: dynamic timeline table with `#`, `STEP`, `STATUS`, `OUTPUT`, and `TIME`.
+- `VIEWER`: read-only text viewer for the selected output file.
+
+The top bar contains only `CatOS`, `RUN #<id>`, status, and elapsed time. The bottom bar shows only implemented DOS-like shortcuts.
+
+### Dynamic timeline
+
+The UI timeline is built from actual run/session artifacts and timeline-relevant files. It does not pre-generate future steps. Rows appear only after corresponding session data or output files exist.
+
+Current deterministic mapping:
+
+- `session.json` or `task-brief.json` -> `ANALYSIS`
+- first attempt artifact -> `CODEX`
+- later attempts -> `CODEX (REWORK #N)`
+- validation report -> `VALIDATION`
+- review report -> `REVIEW`
+
+Each row has at most one primary output file and shows `/copy/ /view/` actions when that output exists. `/copy/` copies the relative path, not file contents.
+
+### Output Viewer
+
+The viewer opens only files inside the selected run directory. Supported extensions are:
+
+- `.md`
+- `.txt`
+- `.json`
+- `.diff`
+- `.log`
+
+JSON is pretty printed. Markdown is shown as plain text. Diff files keep minimal text coloring for added (`+`) and removed (`-`) lines. Large files are truncated to keep the UI responsive.
+
+### Human Review
+
+Human Review is displayed as a separate system state after automatic processing, not as a normal future timeline step. When the authoritative final result requires human intervention, the UI shows:
+
+```text
+HUMAN REVIEW REQUIRED
+[ ACCEPT ] [ RETRY ] [ REVISE ] [ REJECT ]
+```
+
+For this MVP, decision actions are read-only guidance and point users back to the existing CLI Human Gate flow. The UI does not bypass Human Gate rules.
+
+### Final Export
+
+The UI writes and displays the final export at:
+
+```text
+runs/<runId>/AUTOCODEX_SESSION_REPORT.md
+```
+
+The report is generated from existing audit artifacts where available: input/session metadata, steps, attempts, decisions, validation, review, changed files, commit/PR handoff notes, and known limitations. It is created on explicit final-export request and best-effort after UI-started run exit or stop.
+
+### STOP state
+
+`STOP` is implemented only for runs started by the current UI server process. It sends `SIGTERM` to the active child process, writes a `.ui-stopped` marker, preserves files already written, and refreshes the final export best-effort. For runs not owned by the active UI process, the API reports stop as unsupported and the UI does not present an active stop control.
+
+### Security limitations
+
+- No automatic push.
+- No automatic remote PR.
+- No merge.
+- No GitHub API or credentials in UI.
+- Output reading is restricted to the selected run directory and rejects path traversal.
+- Project start validation checks repository existence, Git repository presence, and base/target branch existence before launching the existing run command.
+- Workspace Guard and branch workflow remain owned by the existing backend/CLI code.
+
+### Known limitations
+
+- Human Review decisions are not yet wired to a browser form; use the CLI decision commands.
+- STOP is best-effort and only applies to UI-owned child processes.
+- The UI uses 1.5 second polling rather than websockets/SSE. Running STEP rows show a client-only ASCII spinner (`|`, `/`, `-`, `\`) at roughly 200 ms; spinner frames are never written to timeline or backend artifacts.
+- Branch selection is text input in this first version.
+- The UI is designed for one active local operator and does not implement users, auth, or parallel run management.

@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>CatOS AutoCodex</title>
+    <link rel="stylesheet" href="/app.css">
+  </head>
+  <body>
+    <header>
+      <span>CatOS</span>
+      <span id="runNo">RUN #-</span>
+      <span id="status">idle</span>
+      <span id="elapsed">00:00</span>
+    </header>
+    <main>
+      <section>
+        <h2>SETUP</h2>
+        <label>Project<select id="project"></select></label>
+        <label>Repository<input id="repo" readonly></label>
+        <label>Base branch<input id="base"></label>
+        <label>PR target<input id="target"></label>
+        <label>Task<textarea id="task"></textarea></label>
+        <p id="sandbox">Sandbox: -</p>
+        <button id="run">RUN</button>
+        <button id="stop" hidden>STOP</button>
+      </section>
+      <section class="run">
+        <h2>RUN</h2>
+        <div id="currentStep" class="current-step" hidden></div>
+        <table>
+          <thead>
+            <tr><th>#</th><th>STEP</th><th>STATUS</th><th>OUTPUT</th><th>TIME</th></tr>
+          </thead>
+          <tbody id="timeline"></tbody>
+        </table>
+        <div id="system"></div>
+      </section>
+      <section>
+        <h2>VIEWER</h2>
+        <div id="viewerTitle">No output selected</div>
+        <pre id="viewer"></pre>
+      </section>
+    </main>
+    <footer>
+      <span>F1 Help</span>
+      <span>F2 Refresh</span>
+      <span>F3 Open Output</span>
+      <span id="f5" hidden>F5 Stop Run</span>
+      <span id="f9">F9 Final Export</span>
+      <span>F10 Quit</span>
+    </footer>
+    <script src="/app.js"></script>
+  </body>
+</html>
