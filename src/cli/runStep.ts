@@ -34,6 +34,7 @@ import {
   type ValidationRunner,
 } from "../validationRunner.js";
 import { resolveWorkspaceRoot } from "../workspaceRoot.js";
+import { assertWorkspaceBranch } from "../gitSession.js";
 
 type RunStepOptions = {
   runsDir?: string;
@@ -232,6 +233,8 @@ export async function runStepCommand(
 
   const effectiveWorkspacePath =
     workspacePath ?? path.join(runDir, "workspace");
+
+  if (session.git) await assertWorkspaceBranch(runDir);
 
   const workspaceRoot = resolveWorkspaceRoot(
     loaded.config.execution.workspaceRoot,

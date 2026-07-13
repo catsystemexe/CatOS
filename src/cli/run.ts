@@ -1,14 +1,15 @@
 import { analyzeTaskBrief, writeTaskBrief, type TaskAnalystProvider } from "../agents/taskAnalyst.js";
 import { loadProjectConfig } from "../config/loadConfig.js";
 import { createRun } from "../runs/createRun.js";
-import { CodexSdkWorker, writeCodingArtifacts, type CodingWorker } from "../codingWorker.js";
+import { CodexSdkWorker, writeCodingArtifacts, type CodingWorker, normalizeWorkBranchName, buildIsolatedWorkspacePath } from "../codingWorker.js";
 import { ShellValidationRunner, buildValidationCommands, writeValidationReport, type ValidationRunner } from "../validationRunner.js";
 import { reviewChange, writeReviewReport, type ReviewerProvider } from "../agents/reviewer.js";
 import { resolveWorkspaceRoot } from "../workspaceRoot.js";
 import { buildReworkPackage, hasRepeatedBlockingFinding, writeFinalResult, writeReworkPackage } from "../reworkLoop.js";
 import type { FinalResult } from "../schemas/finalResult.js";
 import path from "node:path";
-import { artifactRefs, completeAttempt, createSession, startAttempt } from "../runs/sessionModel.js";
+import { artifactRefs, completeAttempt, createSession, startAttempt, appendTimelineEvent } from "../runs/sessionModel.js";
+import { assertWorkspaceBranch, resolveGitContext } from "../gitSession.js";
 
 type RunCliOptions = {
   cwd?: string;
@@ -44,11 +45,18 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
     throw new Error(`ID projektu v konfiguraci (${loaded.config.project.id}) neodpovídá parametru --project (${projectId}).`);
   }
 
+  const baseBranch = readOption(args, "--base-branch") ?? loaded.config.project.baseBranch;
+  if (!baseBranch) throw new Error("Missing base branch: pass --base-branch or set project.baseBranch in config.");
+  const prTargetBranch = readOption(args, "--pr-target") ?? loaded.config.git.prTargetBranch ?? baseBranch;
+  const workspaceRoot = resolveWorkspaceRoot(loaded.config.execution.workspaceRoot);
   const run = await createRun(projectId, goal, configPath, { runsDir: options.runsDir });
-  const sessionState = await createSession({ runDir: run.runDir, runId: run.runId, goal, branch: `catos/${run.runId}`, requestTitle: "Initial run", request: goal });
+  const runBranch = normalizeWorkBranchName(run.runId);
+  const workspacePath = await buildIsolatedWorkspacePath({ workspaceRoot, runId: run.runId, repositoryPath: loaded.absoluteRepoPath });
+  const git = await resolveGitContext({ projectId, repositoryPath: loaded.absoluteRepoPath, baseBranch, prTargetBranch, runBranch, workspacePath, remoteName: loaded.config.git.remoteName });
+  const sessionState = await createSession({ runDir: run.runDir, runId: run.runId, goal, branch: runBranch, workspacePath, git, requestTitle: "Initial run", request: goal });
+  await appendTimelineEvent(run.runDir, { type: "git.base_resolved", sessionId: run.runId, metadata: { baseBranch, baseCommit: git.baseCommit, runBranch, prTargetBranch } });
   const analysis = await analyzeTaskBrief(goal, projectId, { provider: options.taskAnalystProvider });
   const taskBriefPath = await writeTaskBrief(run.runDir, analysis.taskBrief);
-  const workspaceRoot = resolveWorkspaceRoot(loaded.config.execution.workspaceRoot);
   const codingWorker = options.codingWorker ?? new CodexSdkWorker();
   const validationRunner = options.validationRunner ?? new ShellValidationRunner();
   const validationCommands = buildValidationCommands(loaded.config.commands, loaded.config.validation);
@@ -60,11 +68,15 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
   let codingResult = await codingWorker.executeTask({
     instruction: analysis.taskBrief.codexInstruction,
     repositoryPath: loaded.absoluteRepoPath,
-    baseBranch: loaded.config.project.baseBranch,
+    baseBranch,
+    baseCommit: git.baseCommit,
+    runBranch,
+    workspacePath,
     runId: run.runId,
     workspaceRoot,
     sandboxMode: loaded.config.codex.sandboxMode,
   });
+  await appendTimelineEvent(run.runDir, { type: "git.run_branch_created", sessionId: run.runId, metadata: { baseBranch, baseCommit: git.baseCommit, runBranch, prTargetBranch } });
   const codingArtifacts = await writeCodingArtifacts(run.runDir, analysis.taskBrief, codingResult);
   let validationReport = await validationRunner.run({ workspacePath: codingResult.workspacePath, commands: validationCommands });
   let validationReportPath = await writeValidationReport(run.runDir, validationReport);
@@ -156,6 +168,7 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
     const beforeValidationStatus = validationReport.status;
     currentStep = await import("../runs/sessionModel.js").then(m => m.loadStep(run.runDir, currentStep.stepId));
     currentAttempt = await startAttempt({ runDir: run.runDir, step: currentStep, prompt: reworkPackage.mustChange.join("\n"), runtimeMode: loaded.config.codex.sandboxMode });
+    await assertWorkspaceBranch(run.runDir);
     codingResult = await codingWorker.continueTask({
       threadId: codingResult.threadId,
       workspacePath: codingResult.workspacePath,

@@ -10,6 +10,7 @@ import { collectWorkspaceGitState } from "./gitWorkspaceState.js";
 import type { FinalResult } from "./schemas/finalResult.js";
 import type { HumanDecision } from "./schemas/humanDecision.js";
 import type { TaskBrief } from "./schemas/taskBrief.js";
+import { loadSession } from "./runs/sessionModel.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -111,7 +112,9 @@ export class GitCommitWorker implements CommitWorker {
     if (top !== path.resolve(workspace)) throw new Error("Workspace is not the exact Git top-level.");
     const branch = await git(workspace, ["branch", "--show-current"]);
     if (!branch) throw new Error("Workspace is in detached HEAD.");
-    if (!branch.startsWith("catos/")) throw new Error("Branch must start with catos/.");
+    const session = await loadSession(input.runDir).catch(() => undefined);
+    if (session?.git && branch !== session.git.runBranch) throw new Error(`Session expects branch ${session.git.runBranch}, but workspace is on branch ${branch}.`);
+    if (!session?.git && !branch.startsWith("catos/")) throw new Error("Branch must start with catos/.");
     const workspaceState = await collectWorkspaceGitState(workspace);
     if (!workspaceState.status.trim()) throw new Error("No Git working tree changes to commit.");
     const changedFiles = workspaceState.changedFiles;

@@ -7,7 +7,7 @@ export const projectConfigSchema = z.object({
     id: z.string().min(1, "project.id is required"),
     name: z.string().min(1, "project.name is required"),
     repoPath: z.string().min(1, "project.repoPath is required"),
-    baseBranch: z.string().min(1, "project.baseBranch is required"),
+    baseBranch: z.string().min(1).optional(),
   }),
   commands: z.object({
     typecheck: z.string().min(1, "commands.typecheck is required"),
@@ -33,7 +33,9 @@ export const projectConfigSchema = z.object({
   git: z.object({
     commitName: z.string().min(1).optional(),
     commitEmail: z.string().email().optional(),
-  }).default({}),
+    remoteName: z.string().min(1).default("origin"),
+    prTargetBranch: z.string().min(1).optional(),
+  }).default({ remoteName: "origin" }),
   validation: z.object({
     timeoutMs: z.number().int().positive().default(120_000),
   }).default({ timeoutMs: 120_000 }),

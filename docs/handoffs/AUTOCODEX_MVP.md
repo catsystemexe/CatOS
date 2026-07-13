@@ -574,3 +574,86 @@ Previous attempt summaries are chronological and limited to the last five attemp
 - Output Requirements
 
 The output requirements explicitly forbid push, merge, and audit artifact deletion, and require a concise change summary, changed files, validation results, and known limitations.
+
+## Codex-like Git branch workflow
+
+AutoCodex sessions now use an explicit Git contract instead of relying on the
+current repository `HEAD`. A user selects a project and a base branch. CatOS
+resolves that base branch to an exact immutable commit (`baseCommit`), creates a
+single deterministic run branch (`catos/<runId>`) from that commit, and runs all
+steps and attempts in one isolated Git worktree. The target project worktree is
+separate from the CatOS orchestrator repository; CatOS stores audit artifacts
+under `runs/<sessionId>` while source changes happen only in the target project
+workspace.
+
+The session Git context records:
+
+* project id,
+* target repository path,
+* remote name and sanitized remote URL when present,
+* base branch,
+* exact base commit snapshot,
+* run branch,
+* PR target branch,
+* isolated workspace path.
+
+The run CLI accepts explicit branch selection:
+
+```bash
+npm run catos -- run \
+  --project <projectId> \
+  --base-branch <branch> \
+  --pr-target <branch> \
+  --task "<task>"
+```
+
+`--base-branch` overrides the project config. If it is omitted, CatOS uses
+`project.baseBranch`. If neither is present, run startup fails with a clear
+error. `--pr-target` is optional and defaults to the selected base branch; it may
+be different from the base snapshot branch, but it must resolve to a local Git
+commit at session start.
+
+Before creating a workspace, CatOS verifies the target path is a Git repository,
+verifies both base and PR target branches, resolves
+`git rev-parse <baseBranch>^{commit}`, stores the resulting hash as
+`baseCommit`, and creates the run branch from that hash. The run branch is never
+created from a moving branch name.
+
+Session invariants:
+
+* all steps and attempts use the same isolated worktree,
+* all changes stay on the stored run branch,
+* the base branch is never modified directly,
+* later attempts never create a new run branch,
+* changing the base branch mid-session is invalid,
+* Workspace Guard still validates the workspace,
+* continuation checks fail if the worktree branch differs from the stored
+  `runBranch`.
+
+Remote metadata is read with `git remote get-url <remoteName>`. Missing remotes
+do not block local sessions or commits. Credential-bearing HTTPS remotes are
+sanitized before they are stored in session, review, or handoff artifacts. CatOS
+never stores GitHub tokens, never accesses the SSH agent, and never derives
+credentials from remote URLs.
+
+After an approved commit, CatOS writes deterministic manual handoff artifacts:
+
+* `runs/<sessionId>/handoff/pr-handoff.json`
+* `runs/<sessionId>/handoff/pr-handoff.md`
+
+The handoff records the base snapshot, run branch, head commit, PR target,
+remote status, push readiness, and PR direction (`runBranch → prTargetBranch`).
+If a commit exists, the remote exists, and the workspace is still on the stored
+run branch, CatOS renders but does not run the manual push command:
+
+```bash
+git -C "<workspacePath>" push -u "<remoteName>" "<runBranch>"
+```
+
+If no commit exists, the push status is `not-committed`. If the remote is absent,
+the push status is `remote-missing` and no fake push command is generated. If the
+branch invariant fails, the status is `blocked` with explicit blocking reasons.
+
+CatOS does not automatically push, create remote PRs, call the GitHub API, merge,
+manage OAuth, or handle GitHub credentials. The handoff is only metadata for a
+human to push, open a PR, review, and merge manually.
