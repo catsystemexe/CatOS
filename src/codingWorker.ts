@@ -1,9 +1,10 @@
-import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import type { ReworkPackage } from "./schemas/reworkPackage.js";
 import path from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, fork } from "node:child_process";
 import { collectWorkspaceGitState } from "./gitWorkspaceState.js";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 
 const execFileAsync = promisify(execFile);
 
@@ -22,6 +23,7 @@ export type CodingTask = {
 export type ReworkCodingTask = {
   threadId: string;
   workspacePath: string;
+  workspaceRoot: string;
   reworkPackage: ReworkPackage;
   sandboxMode?: SandboxMode;
 };
@@ -44,31 +46,69 @@ export interface CodingWorker {
 
 type GitResult = { stdout: string; stderr: string };
 
-type CodexThread = {
-  id?: string;
-  threadId?: string;
-  run(instruction: string): Promise<unknown>;
+export type CodexRuntimeRequest =
+  | {
+      mode: "start";
+      workingDirectory: string;
+      sandboxMode: SandboxMode;
+      model?: string;
+      instruction: string;
+    }
+  | {
+      mode: "continue";
+      threadId: string;
+      workingDirectory: string;
+      sandboxMode: SandboxMode;
+      model?: string;
+      instruction: string;
+    };
+
+export type CodexRuntimeResult = {
+  threadId: string;
+  finalResponse: string;
 };
 
-type CodexClient = {
-  startThread(options: { workingDirectory: string; sandboxMode?: SandboxMode; model?: string }): CodexThread;
-  resumeThread?: (threadId: string, options: { workingDirectory: string; sandboxMode?: SandboxMode; model?: string }) => CodexThread;
-  continueThread?: (threadId: string, options: { workingDirectory: string; sandboxMode?: SandboxMode; model?: string }) => CodexThread;
+export type CodexRuntimeLogSummary = {
+  stdoutPath: string;
+  stderrPath: string;
+  stdoutBytes: number;
+  stderrBytes: number;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
 };
 
-type CodexConstructor = new () => CodexClient;
-
-type CodexTurn = {
-  finalResponse?: string;
-  response?: string;
-  text?: string;
-};
+export type CodexRuntimeRunner = (input: { request: CodexRuntimeRequest; env: NodeJS.ProcessEnv; cwd: string; runtimeDir: string }) => Promise<CodexRuntimeResult>;
 
 export type CodexSdkWorkerOptions = {
-  codexFactory?: () => CodexClient;
+  codexRuntimeRunner?: CodexRuntimeRunner;
+  codexRuntimeChildPath?: string;
+  codexRuntimeTimeoutMs?: number;
   git?: (args: string[], cwd?: string) => Promise<GitResult>;
   catosRoot?: string;
 };
+
+export type RuntimeManifest = {
+  schemaVersion: 1;
+  sandboxMode: SandboxMode;
+  sandboxIsolation: SandboxIsolation;
+  workspacePath: string;
+  workspaceRoot: string;
+  environmentPolicy: "allowlist";
+  allowedEnvironmentVariables: string[];
+  githubCredentialsRemoved: boolean;
+  sshAgentRemoved: boolean;
+  gitConfigGlobal: "/dev/null";
+  gitConfigSystem: "/dev/null";
+  gitTerminalPrompt: "0";
+  homePath: string;
+  tmpdirPath: string;
+  network: "unrestricted";
+  startedAt: string;
+};
+
+const BASE_CODEX_ENV_ALLOWLIST = ["PATH", "LANG", "LC_ALL", "TERM", "OPENAI_API_KEY", "OPENAI_BASE_URL"] as const;
+const DEFAULT_CODEX_RUNTIME_TIMEOUT_MS = 30 * 60 * 1000;
+const DEFAULT_CODEX_RUNTIME_LOG_LIMIT_BYTES = 1024 * 1024;
 
 export function normalizeWorkBranchName(runId: string): string {
   const normalized = runId
@@ -100,8 +140,75 @@ async function realpathIfExists(inputPath: string): Promise<string> {
   }
 }
 
+function buildCodexEnvironment(runtimeHome: string, runtimeTmpdir: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const name of BASE_CODEX_ENV_ALLOWLIST) {
+    if (process.env[name] !== undefined) {
+      env[name] = process.env[name];
+    }
+  }
+  env.HOME = runtimeHome;
+  env.TMPDIR = runtimeTmpdir;
+  env.GIT_CONFIG_GLOBAL = "/dev/null";
+  env.GIT_CONFIG_SYSTEM = "/dev/null";
+  env.GIT_TERMINAL_PROMPT = "0";
+  return env;
+}
+
+export async function guardCodexWorkspace(input: { workspacePath: string; workspaceRoot: string; repositoryPath?: string; catosRoot?: string }): Promise<{ workspacePath: string; workspaceRoot: string }> {
+  const [workspaceStats, rootStats] = await Promise.all([lstat(input.workspacePath), lstat(input.workspaceRoot)]);
+  if (workspaceStats.isSymbolicLink()) throw new Error(`Codex workspace must not be a symlink: ${input.workspacePath}`);
+  if (rootStats.isSymbolicLink()) throw new Error(`Codex workspace root must not be a symlink: ${input.workspaceRoot}`);
+  if (!workspaceStats.isDirectory()) throw new Error(`Codex workspace must be a directory: ${input.workspacePath}`);
+  if (!rootStats.isDirectory()) throw new Error(`Codex workspace root must be a directory: ${input.workspaceRoot}`);
+
+  const realWorkspacePath = await realpath(input.workspacePath);
+  const realWorkspaceRoot = await realpath(input.workspaceRoot);
+  const home = process.env.HOME ? await realpathIfExists(process.env.HOME) : undefined;
+  const catosRoot = await realpathIfExists(input.catosRoot ?? process.cwd());
+  const repositoryPath = input.repositoryPath ? await realpathIfExists(input.repositoryPath) : undefined;
+
+  if (realWorkspacePath === path.parse(realWorkspacePath).root) throw new Error("Codex workspace must not be filesystem root.");
+  if (home && realWorkspacePath === home) throw new Error("Codex workspace must not be HOME.");
+  if (realWorkspacePath === catosRoot) throw new Error("Codex workspace must not be the CatOS repository root.");
+  if (repositoryPath && realWorkspacePath === repositoryPath) throw new Error("Codex workspace must not be the target repository root.");
+  if (!isPathInside(realWorkspaceRoot, realWorkspacePath)) {
+    throw new Error(`Codex workspace must stay inside configured workspace root. workspace=${realWorkspacePath} root=${realWorkspaceRoot}`);
+  }
+  return { workspacePath: realWorkspacePath, workspaceRoot: realWorkspaceRoot };
+}
+
+async function prepareRuntime(input: { workspacePath: string; workspaceRoot: string; sandboxMode: SandboxMode; sandboxIsolation: SandboxIsolation }): Promise<{ env: NodeJS.ProcessEnv; manifest: RuntimeManifest; runtimeDir: string }> {
+  const runtimeDir = path.join(path.dirname(input.workspacePath), "runtime");
+  const homePath = path.join(runtimeDir, "home");
+  const tmpdirPath = path.join(runtimeDir, "tmp");
+  await mkdir(homePath, { recursive: true });
+  await mkdir(tmpdirPath, { recursive: true });
+  const env = buildCodexEnvironment(homePath, tmpdirPath);
+  const manifest: RuntimeManifest = {
+    schemaVersion: 1,
+    sandboxMode: input.sandboxMode,
+    sandboxIsolation: input.sandboxIsolation,
+    workspacePath: input.workspacePath,
+    workspaceRoot: input.workspaceRoot,
+    environmentPolicy: "allowlist",
+    allowedEnvironmentVariables: Object.keys(env).sort(),
+    githubCredentialsRemoved: !("GITHUB_TOKEN" in env) && !("GH_TOKEN" in env),
+    sshAgentRemoved: !("SSH_AUTH_SOCK" in env),
+    gitConfigGlobal: "/dev/null",
+    gitConfigSystem: "/dev/null",
+    gitTerminalPrompt: "0",
+    homePath,
+    tmpdirPath,
+    network: "unrestricted",
+    startedAt: new Date().toISOString(),
+  };
+  await writeFile(path.join(runtimeDir, "runtime.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  return { env, manifest, runtimeDir };
+}
+
 export async function buildIsolatedWorkspacePath(input: { workspaceRoot: string; runId: string; repositoryPath: string; catosRoot?: string }): Promise<string> {
-  const workspaceRoot = path.resolve(input.workspaceRoot);
+  const workspaceRoot = await realpathIfExists(input.workspaceRoot);
   const workspacePath = path.resolve(workspaceRoot, sanitizeRunIdForPath(input.runId), "workspace");
   const [catosRoot, repositoryPath] = await Promise.all([
     realpathIfExists(input.catosRoot ?? process.cwd()),
@@ -187,22 +294,6 @@ export function buildReworkCodexInstruction(reworkPackage: ReworkPackage): strin
   ].join("\n");
 }
 
-function stringifyCodexTurn(turn: unknown): string {
-  if (typeof turn === "string") return turn;
-  if (turn && typeof turn === "object") {
-    const candidate = turn as CodexTurn;
-    return candidate.finalResponse ?? candidate.response ?? candidate.text ?? JSON.stringify(turn);
-  }
-  return String(turn ?? "");
-}
-
-async function loadDefaultCodexFactory(): Promise<() => CodexClient> {
-  // The official dependency is installed by npm in environments where registry access allows it.
-  // @ts-ignore The package may be unavailable in offline/firewalled test environments; do not add a local shim.
-  const sdk: { Codex: CodexConstructor } = await import("@openai/codex-sdk");
-  return () => new sdk.Codex();
-}
-
 async function defaultGit(args: string[], cwd?: string): Promise<GitResult> {
   try {
     const { stdout, stderr } = await execFileAsync("git", args, { cwd, encoding: "utf8", maxBuffer: 20 * 1024 * 1024 });
@@ -214,14 +305,219 @@ async function defaultGit(args: string[], cwd?: string): Promise<GitResult> {
   }
 }
 
+function defaultCodexRuntimeChildPath(): string {
+  const current = fileURLToPath(import.meta.url);
+  const extension = path.extname(current);
+  return path.join(path.dirname(current), `codexRuntimeChild${extension}`);
+}
+
+async function assertCodexRuntimeChildPath(childPath: string): Promise<string> {
+  const resolved = path.resolve(childPath);
+  try {
+    await access(resolved);
+  } catch {
+    throw new Error(`Codex runtime child module does not exist: ${resolved}`);
+  }
+  if (![".js", ".cjs", ".mjs", ".ts"].includes(path.extname(resolved))) {
+    throw new Error(`Codex runtime child module must be a JavaScript/TypeScript file: ${resolved}`);
+  }
+  return resolved;
+}
+
+function formatChildError(error: unknown): string {
+  if (error && typeof error === "object") {
+    const candidate = error as { name?: unknown; message?: unknown; stack?: unknown };
+    return [candidate.name, candidate.message, candidate.stack].filter((value): value is string => typeof value === "string" && value.length > 0).join("\n");
+  }
+  return String(error ?? "unknown error");
+}
+
+function resolveCodexRuntimeTimeoutMs(configured?: number): number {
+  if (configured !== undefined) return configured;
+  const raw = process.env.CATOS_CODEX_RUNTIME_TIMEOUT_MS;
+  if (!raw) return DEFAULT_CODEX_RUNTIME_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`CATOS_CODEX_RUNTIME_TIMEOUT_MS must be a positive number of milliseconds, got: ${raw}`);
+  }
+  return parsed;
+}
+
+function appendLimited(buffer: Buffer, chunk: Buffer, limitBytes: number): { buffer: Buffer; truncated: boolean } {
+  if (buffer.byteLength >= limitBytes) return { buffer, truncated: true };
+  const remaining = limitBytes - buffer.byteLength;
+  if (chunk.byteLength <= remaining) return { buffer: Buffer.concat([buffer, chunk]), truncated: false };
+  return { buffer: Buffer.concat([buffer, chunk.subarray(0, remaining)]), truncated: true };
+}
+
+async function writeRuntimeLogs(runtimeDir: string, stdout: Buffer, stderr: Buffer, stdoutTruncated: boolean, stderrTruncated: boolean): Promise<CodexRuntimeLogSummary> {
+  const stdoutPath = path.join(runtimeDir, "codex-runtime.stdout.log");
+  const stderrPath = path.join(runtimeDir, "codex-runtime.stderr.log");
+  await Promise.all([
+    writeFile(stdoutPath, stdout),
+    writeFile(stderrPath, stderr),
+  ]);
+  return {
+    stdoutPath,
+    stderrPath,
+    stdoutBytes: stdout.byteLength,
+    stderrBytes: stderr.byteLength,
+    stdoutTruncated,
+    stderrTruncated,
+  };
+}
+
+async function writeRuntimeError(runtimeDir: string, reason: string, logSummary: CodexRuntimeLogSummary): Promise<void> {
+  await writeFile(path.join(runtimeDir, "codex-runtime-error.json"), `${JSON.stringify({
+    schemaVersion: 1,
+    reason,
+    logSummary,
+    recordedAt: new Date().toISOString(),
+  }, null, 2)}\n`, "utf8");
+}
+
+export function createForkedCodexRuntimeRunner(options: { childPath?: string; timeoutMs?: number; logLimitBytes?: number } = {}): CodexRuntimeRunner {
+  return async (input) => {
+    return await runForkedCodexRuntime({
+      ...input,
+      childPath: options.childPath ?? defaultCodexRuntimeChildPath(),
+      timeoutMs: options.timeoutMs ?? DEFAULT_CODEX_RUNTIME_TIMEOUT_MS,
+      logLimitBytes: options.logLimitBytes ?? DEFAULT_CODEX_RUNTIME_LOG_LIMIT_BYTES,
+    });
+  };
+}
+
+async function runForkedCodexRuntime(input: { request: CodexRuntimeRequest; env: NodeJS.ProcessEnv; cwd: string; runtimeDir: string; childPath: string; timeoutMs: number; logLimitBytes: number }): Promise<CodexRuntimeResult> {
+  const childPath = await assertCodexRuntimeChildPath(input.childPath);
+  const execArgv = childPath.endsWith(".ts") ? ["--import", "tsx"] : [];
+  const child = fork(childPath, [], {
+    cwd: input.cwd,
+    env: input.env,
+    execArgv,
+    serialization: "json",
+    silent: true,
+  });
+  let stdout = Buffer.alloc(0);
+  let stderr = Buffer.alloc(0);
+  let stdoutTruncated = false;
+  let stderrTruncated = false;
+  const onStdout = (chunk: Buffer) => {
+    const next = appendLimited(stdout, chunk, input.logLimitBytes);
+    stdout = next.buffer;
+    stdoutTruncated = stdoutTruncated || next.truncated;
+  };
+  const onStderr = (chunk: Buffer) => {
+    const next = appendLimited(stderr, chunk, input.logLimitBytes);
+    stderr = next.buffer;
+    stderrTruncated = stderrTruncated || next.truncated;
+  };
+  child.stdout?.on("data", onStdout);
+  child.stderr?.on("data", onStderr);
+
+  return await new Promise<CodexRuntimeResult>((resolve, reject) => {
+    let settled = false;
+    let messageReceived = false;
+    let timeout: NodeJS.Timeout | undefined;
+
+    async function finishLogs(reason?: string): Promise<void> {
+      const logSummary = await writeRuntimeLogs(input.runtimeDir, stdout, stderr, stdoutTruncated, stderrTruncated);
+      if (reason) await writeRuntimeError(input.runtimeDir, reason, logSummary);
+    }
+
+    function cleanup(): void {
+      if (timeout) clearTimeout(timeout);
+      child.stdout?.off("data", onStdout);
+      child.stderr?.off("data", onStderr);
+      child.removeAllListeners("error");
+      child.removeAllListeners("message");
+      child.removeAllListeners("exit");
+      if (child.connected) child.disconnect();
+    }
+
+    function terminateChild(): void {
+      if (!child.killed) child.kill();
+    }
+
+    function settleWithError(error: Error, reason: string): void {
+      if (settled) return;
+      settled = true;
+      terminateChild();
+      void finishLogs(reason).finally(() => {
+        cleanup();
+        reject(error);
+      });
+    }
+
+    function settleWithSuccess(result: CodexRuntimeResult): void {
+      if (settled) return;
+      settled = true;
+      terminateChild();
+      void finishLogs().finally(() => {
+        cleanup();
+        resolve(result);
+      });
+    }
+
+    timeout = setTimeout(() => {
+      settleWithError(new Error(`Codex runtime worker timed out after ${input.timeoutMs}ms.`), "timeout");
+    }, input.timeoutMs);
+    timeout.unref?.();
+
+    child.once("error", (error) => {
+      settleWithError(new Error(`Codex runtime worker failed to start: ${error.message}`), "start-error");
+    });
+
+    child.on("message", (message: unknown) => {
+      if (settled) return;
+      messageReceived = true;
+      if (!message || typeof message !== "object") {
+        settleWithError(new Error("Codex runtime worker returned invalid IPC output."), "invalid-ipc");
+        return;
+      }
+      const payload = message as { ok?: unknown; result?: unknown; error?: unknown };
+      if (payload.ok === true && payload.result && typeof payload.result === "object") {
+        const result = payload.result as Partial<CodexRuntimeResult>;
+        if (typeof result.threadId === "string" && typeof result.finalResponse === "string") {
+          settleWithSuccess({ threadId: result.threadId, finalResponse: result.finalResponse });
+          return;
+        }
+      }
+      if (payload.ok === false) {
+        settleWithError(new Error(`Codex runtime worker SDK error:\n${formatChildError(payload.error)}${stderr.byteLength > 0 ? `\n\nstderr:\n${stderr.toString("utf8")}` : ""}`), "sdk-error");
+        return;
+      }
+      settleWithError(new Error("Codex runtime worker returned malformed result."), "malformed-result");
+    });
+
+    child.once("exit", (code, signal) => {
+      if (settled) return;
+      if (signal) {
+        settleWithError(new Error(`Codex runtime worker terminated by signal ${signal}.${stderr.byteLength > 0 ? `\n\nstderr:\n${stderr.toString("utf8")}` : ""}`), "signal");
+        return;
+      }
+      if (code !== 0) {
+        settleWithError(new Error(`Codex runtime worker exited with code ${code ?? "null"}.${stderr.byteLength > 0 ? `\n\nstderr:\n${stderr.toString("utf8")}` : ""}`), "exit-code");
+        return;
+      }
+      if (!messageReceived) {
+        settleWithError(new Error(`Codex runtime worker exited without IPC result.${stdout.byteLength > 0 ? `\n\nstdout:\n${stdout.toString("utf8")}` : ""}${stderr.byteLength > 0 ? `\n\nstderr:\n${stderr.toString("utf8")}` : ""}`), "missing-ipc");
+      }
+    });
+
+    child.send(input.request, (error) => {
+      if (error) settleWithError(new Error(`Failed to send Codex runtime request: ${error.message}`), "send-error");
+    });
+  });
+}
+
 export class CodexSdkWorker implements CodingWorker {
   private readonly git: (args: string[], cwd?: string) => Promise<GitResult>;
-  private readonly codexFactory?: () => CodexClient;
+  private readonly codexRuntimeRunner: CodexRuntimeRunner;
   private readonly catosRoot?: string;
 
   constructor(options: CodexSdkWorkerOptions = {}) {
     this.git = options.git ?? defaultGit;
-    this.codexFactory = options.codexFactory;
+    this.codexRuntimeRunner = options.codexRuntimeRunner ?? createForkedCodexRuntimeRunner({ childPath: options.codexRuntimeChildPath, timeoutMs: resolveCodexRuntimeTimeoutMs(options.codexRuntimeTimeoutMs) });
     this.catosRoot = options.catosRoot;
   }
 
@@ -260,45 +556,54 @@ export class CodexSdkWorker implements CodingWorker {
       ].join("\n"));
     }
 
-    const factory = this.codexFactory ?? (await loadDefaultCodexFactory());
-    const codex = factory();
-    const thread = codex.startThread({
-      workingDirectory: workspacePath,
-      sandboxMode,
-      ...(process.env.CATOS_CODEX_MODEL ? { model: process.env.CATOS_CODEX_MODEL } : {}),
+    const guarded = await guardCodexWorkspace({ workspacePath, workspaceRoot: input.workspaceRoot, repositoryPath, catosRoot: this.catosRoot });
+    const runtime = await prepareRuntime({ workspacePath: guarded.workspacePath, workspaceRoot: guarded.workspaceRoot, sandboxMode, sandboxIsolation });
+    const model = process.env.CATOS_CODEX_MODEL;
+    const runtimeResult = await this.codexRuntimeRunner({
+      env: runtime.env,
+      cwd: guarded.workspacePath,
+      runtimeDir: runtime.runtimeDir,
+      request: {
+        mode: "start",
+        workingDirectory: guarded.workspacePath,
+        sandboxMode,
+        ...(model ? { model } : {}),
+        instruction: buildCodexInstruction(input.instruction),
+      },
     });
-    const turn = await thread.run(buildCodexInstruction(input.instruction));
 
     return await this.collectResult({
-      threadId: thread.id ?? thread.threadId ?? "unknown",
-      finalResponse: stringifyCodexTurn(turn),
-      workspacePath,
+      threadId: runtimeResult.threadId,
+      finalResponse: runtimeResult.finalResponse,
+      workspacePath: guarded.workspacePath,
       sandboxMode,
       sandboxIsolation,
     });
   }
 
   async continueTask(input: ReworkCodingTask): Promise<CodingResult> {
-    const workspacePath = path.resolve(input.workspacePath);
     const sandboxMode = input.sandboxMode ?? "workspace-write";
     const sandboxIsolation = sandboxMode === "danger-full-access" ? "disabled" : "enabled";
-    const factory = this.codexFactory ?? (await loadDefaultCodexFactory());
-    const codex = factory();
-    const options = {
-      workingDirectory: workspacePath,
-      sandboxMode,
-      ...(process.env.CATOS_CODEX_MODEL ? { model: process.env.CATOS_CODEX_MODEL } : {}),
-    };
-    const resume = codex.resumeThread ?? codex.continueThread;
-    if (!resume) {
-      throw new Error("Codex SDK client does not expose resumeThread/continueThread for rework continuation.");
-    }
-    const thread = resume.call(codex, input.threadId, options);
-    const turn = await thread.run(buildReworkCodexInstruction(input.reworkPackage));
+    const guarded = await guardCodexWorkspace({ workspacePath: input.workspacePath, workspaceRoot: input.workspaceRoot, catosRoot: this.catosRoot });
+    const runtime = await prepareRuntime({ workspacePath: guarded.workspacePath, workspaceRoot: guarded.workspaceRoot, sandboxMode, sandboxIsolation });
+    const model = process.env.CATOS_CODEX_MODEL;
+    const runtimeResult = await this.codexRuntimeRunner({
+      env: runtime.env,
+      cwd: guarded.workspacePath,
+      runtimeDir: runtime.runtimeDir,
+      request: {
+        mode: "continue",
+        threadId: input.threadId,
+        workingDirectory: guarded.workspacePath,
+        sandboxMode,
+        ...(model ? { model } : {}),
+        instruction: buildReworkCodexInstruction(input.reworkPackage),
+      },
+    });
     return await this.collectResult({
-      threadId: thread.id ?? thread.threadId ?? input.threadId,
-      finalResponse: stringifyCodexTurn(turn),
-      workspacePath,
+      threadId: runtimeResult.threadId,
+      finalResponse: runtimeResult.finalResponse,
+      workspacePath: guarded.workspacePath,
       sandboxMode,
       sandboxIsolation,
     });

@@ -129,6 +129,7 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
     codingResult = await codingWorker.continueTask({
       threadId: codingResult.threadId,
       workspacePath: codingResult.workspacePath,
+      workspaceRoot,
       reworkPackage,
       sandboxMode: loaded.config.codex.sandboxMode,
     });
