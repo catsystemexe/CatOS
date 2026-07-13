@@ -1,8 +1,8 @@
 project:
   id: demo
   name: Demo project
-  repoPath: /tmp/catos-rework-demo
-  baseBranch: main
+  repoPath: /tmp/autocodex-mvp-demo
+  baseBranch: autocodex
 commands:
   typecheck: npm run typecheck
   test: npm run test

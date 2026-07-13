@@ -5,6 +5,15 @@ import { execFile, fork } from "node:child_process";
 import { collectWorkspaceGitState } from "./gitWorkspaceState.js";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
+
+const require = createRequire(import.meta.url);
+
+function resolveTsxImport(): string {
+  return pathToFileURL(require.resolve("tsx")).href;
+};
+
 
 const execFileAsync = promisify(execFile);
 
@@ -115,7 +124,15 @@ export type RuntimeManifest = {
   startedAt: string;
 };
 
-const BASE_CODEX_ENV_ALLOWLIST = ["PATH", "LANG", "LC_ALL", "TERM", "OPENAI_API_KEY", "OPENAI_BASE_URL"] as const;
+const BASE_CODEX_ENV_ALLOWLIST = [
+  "PATH",
+  "LANG",
+  "LC_ALL",
+  "TERM",
+  "OPENAI_API_KEY",
+  "CODEX_API_KEY",
+  "OPENAI_BASE_URL",
+] as const;
 const DEFAULT_CODEX_RUNTIME_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_CODEX_RUNTIME_LOG_LIMIT_BYTES = 1024 * 1024;
 
@@ -398,7 +415,7 @@ export function createForkedCodexRuntimeRunner(options: { childPath?: string; ti
 
 async function runForkedCodexRuntime(input: { request: CodexRuntimeRequest; env: NodeJS.ProcessEnv; cwd: string; runtimeDir: string; childPath: string; timeoutMs: number; logLimitBytes: number }): Promise<CodexRuntimeResult> {
   const childPath = await assertCodexRuntimeChildPath(input.childPath);
-  const execArgv = childPath.endsWith(".ts") ? ["--import", "tsx"] : [];
+  const execArgv = childPath.endsWith(".ts") ? ["--import", resolveTsxImport()] : [];
   const child = fork(childPath, [], {
     cwd: input.cwd,
     env: input.env,
