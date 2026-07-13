@@ -111,6 +111,10 @@ describe("runCommand", () => {
     const finalResult = JSON.parse(await readFile(path.join(runsDir, runDirs[0]!, "final-result.json"), "utf8"));
     expect(finalResult.status).toBe("ACCEPTED");
     expect(finalResult.totalCodingAttempts).toBe(1);
+    const session = JSON.parse(await readFile(path.join(runsDir, runDirs[0]!, "session.json"), "utf8"));
+    expect(session.runId).toBe(runDirs[0]);
+    const timeline = (await readFile(path.join(runsDir, runDirs[0]!, "timeline.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    expect(timeline.map((event) => event.event)).toEqual(["session.created", "step.created", "attempt.started", "attempt.completed"]);
   });
 });
 
@@ -226,6 +230,9 @@ describe("runCommand rework loop", () => {
     const finalResult = JSON.parse(await readFile(path.join(runDir, "final-result.json"), "utf8"));
     expect(finalResult.status).toBe("ACCEPTED");
     expect(finalResult.totalCodingAttempts).toBe(2);
+    const steps = await readdir(path.join(runDir, "steps"));
+    const sessionAttempts = await readdir(path.join(runDir, "steps", steps[0]!, "attempts"));
+    expect(sessionAttempts).toHaveLength(2);
   });
 
   it("stops after rework returns HUMAN_REQUIRED", async () => {
