@@ -124,7 +124,9 @@ test("layout keeps actions visible, wraps long values, and prevents page scrolli
   expect(css).toContain("main{min-height:0;overflow:hidden}");
   expect(css).toContain(".app-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)");
   expect(css).toContain(".setup-panel{border:1px solid #000;padding:6px;display:grid;grid-template-rows:auto auto auto auto minmax(90px,1fr) auto auto");
-  expect(css).toContain(".execution-panel{display:grid;grid-template-rows:minmax(0,1fr) auto");
+  expect(css).toContain(
+    ".execution-panel{display:grid;grid-template-rows:auto minmax(0,1fr) auto"
+  );
   expect(css).toContain(".value-readout{display:block;white-space:normal;overflow-wrap:anywhere;word-break:break-word");
   expect(css).not.toContain("#viewer{");
   expect(css).toContain(".value-readout{display:block;white-space:normal;overflow-wrap:anywhere;word-break:break-word");
