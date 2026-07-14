@@ -127,8 +127,9 @@ test("layout keeps actions visible, wraps long values, and prevents page scrolli
   expect(css).toContain(".execution-panel{display:grid;grid-template-rows:minmax(0,1fr) auto");
   expect(css).toContain(".value-readout{display:block;white-space:normal;overflow-wrap:anywhere;word-break:break-word");
   expect(css).not.toContain("#viewer{");
-  expect(css).not.toContain("text-overflow:ellipsis");
-  expect(css).not.toContain("text-overflow: ellipsis");
+  expect(css).toContain(".value-readout{display:block;white-space:normal;overflow-wrap:anywhere;word-break:break-word");
+  expect(css).not.toContain(".value-readout{display:block;white-space:nowrap");
+  expect(css).toContain("#viewerTitle{min-width:0;white-space:normal;overflow-wrap:anywhere;word-break:break-word");
 });
 
 test("CLONE uses a compact primary button, not full-width input styling", async () => {
@@ -180,7 +181,8 @@ test("RUN and OUTPUT UI hide raw JSON and obsolete controls", async () => {
   expect(app).not.toContain("$('system')");
   expect(app).not.toContain("outputList");
   expect(app).toContain("data-step-path");
-  expect(app).toContain("const disabled=!rf?.readable||!rf?.path?' disabled':''");
+  expect(app).toContain("const available=!!rf?.exists&&!!rf?.readable&&!!rf?.path");
+  expect(app).toContain("copyButtonClass('step-copy',available)");
   expect(html).not.toContain("<table>");
   expect(html).toContain('<div id="timeline" class="timeline-list"');
   expect(css).toContain(".timeline-row{display:grid;grid-template-columns:24px minmax(100px,1fr) 100px 64px 56px");

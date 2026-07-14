@@ -115,6 +115,7 @@ export type CodexRuntimeRunner = (input: { request: CodexRuntimeRequest; env: No
 
 export type CodexSdkWorkerOptions = {
   codexRuntimeRunner?: CodexRuntimeRunner;
+  workspaceProbeOpen?: typeof open;
   codexRuntimeChildPath?: string;
   codexRuntimeTimeoutMs?: number;
   git?: (args: string[], cwd?: string) => Promise<GitResult>;
@@ -237,7 +238,7 @@ export async function guardCodexWorkspace(input: { workspacePath: string; worksp
 }
 
 
-export async function probeWorkspaceWritable(input: { workspacePath: string; workspaceRoot: string; repositoryPath?: string; runId?: string; git?: (args: string[], cwd?: string) => Promise<GitResult> }): Promise<{ writable: true; probe: Record<string, unknown> }> {
+export async function probeWorkspaceWritable(input: { workspacePath: string; workspaceRoot: string; repositoryPath?: string; runId?: string; git?: (args: string[], cwd?: string) => Promise<GitResult>; openFile?: typeof open }): Promise<{ writable: true; probe: Record<string, unknown> }> {
   const requestedWorkspacePath = path.resolve(input.workspacePath);
   const resolvedWorkspacePath = await realpath(input.workspacePath);
   const resolvedWorkspaceRoot = await realpath(input.workspaceRoot);
@@ -249,7 +250,7 @@ export async function probeWorkspaceWritable(input: { workspacePath: string; wor
   const probePath = path.join(resolvedWorkspacePath, probeName);
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
-    handle = await open(probePath, "wx");
+    handle = await (input.openFile ?? open)(probePath, "wx");
     await handle.writeFile("workspace write probe\n", "utf8");
     await handle.sync();
     await handle.close();
@@ -668,11 +669,13 @@ export class CodexSdkWorker implements CodingWorker {
   private readonly git: (args: string[], cwd?: string) => Promise<GitResult>;
   private readonly codexRuntimeRunner: CodexRuntimeRunner;
   private readonly catosRoot?: string;
+  private readonly workspaceProbeOpen?: typeof open;
 
   constructor(options: CodexSdkWorkerOptions = {}) {
     this.git = options.git ?? defaultGit;
     this.codexRuntimeRunner = options.codexRuntimeRunner ?? createForkedCodexRuntimeRunner({ childPath: options.codexRuntimeChildPath, timeoutMs: resolveCodexRuntimeTimeoutMs(options.codexRuntimeTimeoutMs) });
     this.catosRoot = options.catosRoot;
+    this.workspaceProbeOpen = options.workspaceProbeOpen;
   }
 
   private async collectResult(input: { threadId: string; finalResponse: string; workspacePath: string; sandboxMode: SandboxMode; sandboxIsolation: SandboxIsolation }): Promise<CodingResult> {
@@ -718,7 +721,7 @@ export class CodexSdkWorker implements CodingWorker {
     }
 
     const guarded = await guardCodexWorkspace({ workspacePath, workspaceRoot: input.workspaceRoot, repositoryPath, catosRoot: this.catosRoot });
-    const writeProbe = await probeWorkspaceWritable({ workspacePath: guarded.workspacePath, workspaceRoot: guarded.workspaceRoot, repositoryPath, runId: input.runId, git: this.git });
+    const writeProbe = await probeWorkspaceWritable({ workspacePath: guarded.workspacePath, workspaceRoot: guarded.workspaceRoot, repositoryPath, runId: input.runId, git: this.git, openFile: this.workspaceProbeOpen });
     const runtime = await prepareRuntime({ workspacePath: guarded.workspacePath, workspaceRoot: guarded.workspaceRoot, sandboxMode, sandboxIsolation, probe: writeProbe.probe });
     const model = process.env.CATOS_CODEX_MODEL;
     const runtimeResult = await this.codexRuntimeRunner({
@@ -759,7 +762,7 @@ export class CodexSdkWorker implements CodingWorker {
     const sandboxMode = input.sandboxMode ?? "workspace-write";
     const sandboxIsolation = sandboxMode === "danger-full-access" ? "disabled" : "enabled";
     const guarded = await guardCodexWorkspace({ workspacePath: input.workspacePath, workspaceRoot: input.workspaceRoot, catosRoot: this.catosRoot });
-    const writeProbe = await probeWorkspaceWritable({ workspacePath: guarded.workspacePath, workspaceRoot: guarded.workspaceRoot, runId: input.threadId ?? "continue", git: this.git });
+    const writeProbe = await probeWorkspaceWritable({ workspacePath: guarded.workspacePath, workspaceRoot: guarded.workspaceRoot, runId: input.threadId ?? "continue", git: this.git, openFile: this.workspaceProbeOpen });
     const runtime = await prepareRuntime({ workspacePath: guarded.workspacePath, workspaceRoot: guarded.workspaceRoot, sandboxMode, sandboxIsolation, probe: writeProbe.probe });
     const model = process.env.CATOS_CODEX_MODEL;
     const runtimeResult = await this.codexRuntimeRunner({
