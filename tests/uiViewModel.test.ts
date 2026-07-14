@@ -166,3 +166,16 @@ test("first available output is auto-selected", async () => {
   expect(app).toContain("const first=latestRows.map(rowOutputPath).find(Boolean); if(first) await view(first,true);");
   expect(app).toContain("$('viewerTitle').textContent=selected");
 });
+
+test("RUN and OUTPUT UI hide raw JSON in collapsed details and use generated files", async () => {
+  const { app, html, css } = await uiFiles();
+  expect(html).toContain('id="technicalDetails"');
+  expect(html).toContain('id="errorPanel"');
+  expect(html).toContain('id="outputList"');
+  expect(app).toContain("latestSystem?.outputs?.length?latestSystem.outputs");
+  expect(app).toContain("No readable output file was produced.");
+  expect(app).toContain("$('copy').disabled=!res.content");
+  expect(app).not.toContain("rowStep(r){return r.step||r.name||r.path||r.summary||'step';}");
+  expect(css).toContain(".run-panel{overflow:auto}");
+  expect(css).toContain("#errorDetails,#system{max-height:180px;overflow:auto");
+});
