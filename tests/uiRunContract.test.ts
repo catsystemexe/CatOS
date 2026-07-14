@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { mkdtemp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { buildUiSystemState, buildUiTimeline } from "../src/uiViewModel.js";
@@ -22,8 +22,15 @@ test("safe final report and step output access rejects traversal and preserves d
 
 test("frontend MVP removes obsolete RUN and OUTPUT elements", async()=>{ const app = await readFile(new URL("../src/ui/app.js", import.meta.url), "utf8"); const html = await readFile(new URL("../src/ui/index.html", import.meta.url), "utf8"); const css = await readFile(new URL("../src/ui/app.css", import.meta.url), "utf8"); expect(html).not.toContain("technicalDetails"); expect(html).not.toContain("errorPanel"); expect(html).not.toContain("outputList"); expect(html).not.toContain("viewerPath"); expect(html).not.toContain("Technical details"); expect(html).not.toContain("session report"); expect(html).toContain("FINAL_REPORT.md"); expect(app).not.toContain("$('system')"); expect(app).not.toContain("viewerPath"); expect(app).not.toContain("outputList"); expect(app).toContain("data-step-path"); expect(css).toContain("grid-template-columns:24px minmax(100px,1fr) 100px 64px 56px"); });
 
-test("step COPY is disabled when step result unavailable", async()=>{ const source = await readFile(new URL("../src/ui/app.js", import.meta.url), "utf8"); expect(source).toContain("const disabled=!rf?.readable||!rf?.path?' disabled':''"); });
+test("step COPY is disabled when step result unavailable and enabled with availability class when readable", async()=>{ const source = await readFile(new URL("../src/ui/app.js", import.meta.url), "utf8"); expect(source).toContain("const available=!!rf?.exists&&!!rf?.readable&&!!rf?.path"); expect(source).toContain("copy-available"); expect(source).toContain("Result file unavailable"); });
 
 test("RUN row markup contains only index name status duration and COPY", async()=>{ const source = await readFile(new URL("../src/ui/app.js", import.meta.url), "utf8"); expect(source).toContain('class="timeline-index"'); expect(source).toContain('class="timeline-step"'); expect(source).toContain('class="timeline-status"'); expect(source).toContain('class="timeline-time"'); expect(source).toContain('class="step-copy"'); expect(source).not.toContain('timeline-message'); expect(source).not.toContain('${esc(r.message)}'); });
 
 test("OUTPUT panel exposes exactly FINAL_REPORT.md and no selector path or preview", async()=>{ const html = await readFile(new URL("../src/ui/index.html", import.meta.url), "utf8"); expect(html).toContain('<h2>OUTPUT</h2>'); expect(html).toContain('<strong id="viewerTitle">FINAL_REPORT.md</strong>'); expect(html).toContain('>COPY</button>'); expect(html).toContain('>DOWNLOAD</button>'); expect(html).not.toContain('<select'); expect(html).not.toContain('output-path'); expect(html).not.toContain('<pre'); });
+
+
+test("terminal step resultFile availability is checked from files, not status", async()=>{ const f=await fixture(); await writeBase(f,"REWORK","FAIL"); await writeSessionReport(f.runDir); await rm(path.join(f.runDir,"02_VALIDATION.md")); const s=await buildUiSystemState(f.runDir); expect(s.steps.map(r=>r.resultFile)).toEqual([{label:"01_CODEX.md",path:"01_CODEX.md",exists:true,readable:true},{label:"02_VALIDATION.md",path:"02_VALIDATION.md",exists:false,readable:false},{label:"03_REVIEW.md",path:"03_REVIEW.md",exists:true,readable:true}]); });
+
+test("frontend COPY messages and fallback distinguish file load and clipboard failures", async()=>{ const source=await readFile(new URL("../src/ui/app.js", import.meta.url),"utf8"); expect(source).toContain("Could not load result file."); expect(source).toContain("Clipboard unavailable."); expect(source).toContain("Copied."); expect(source).toContain("document.createElement('textarea')"); expect(source).toContain("document.execCommand('copy')"); expect(source).toContain("copy-success"); expect(source).toContain("copy-error"); });
+
+test("FINAL_REPORT.md availability controls COPY and DOWNLOAD from readability and downloadability", async()=>{ const source=await readFile(new URL("../src/ui/app.js", import.meta.url),"utf8"); expect(source).toContain("$('copy').disabled=!copyAvailable"); expect(source).toContain("$('download').disabled=!report.downloadable"); const f=await fixture(); await writeBase(f); await mkdir(path.join(f.runDir,"FINAL_REPORT.md"),{recursive:true}); const s=await buildUiSystemState(f.runDir); expect(s.finalReport).toEqual({label:"FINAL_REPORT.md",path:"FINAL_REPORT.md",readable:false,downloadable:false}); });
