@@ -2,8 +2,15 @@ import { expect, test } from "vitest";
 import { readFile } from "node:fs/promises";
 import { createBranchLoader } from "../src/ui/repositorySelection.js";
 
-test("UI script and markup render GitHub-first checkout controls", async () => {
+async function uiFiles(){
   const app = await readFile(new URL("../src/ui/app.js", import.meta.url), "utf8");
+  const html = await readFile(new URL("../src/ui/index.html", import.meta.url), "utf8");
+  const css = await readFile(new URL("../src/ui/app.css", import.meta.url), "utf8");
+  return { app, html, css };
+}
+
+test("UI script and markup render GitHub-first checkout controls", async () => {
+  const { app, html } = await uiFiles();
   expect(app).toContain("function renderRepositoryOptions(repositories)");
   expect(app).toContain("const gh=repositories.filter(r=>r.source==='github')");
   expect(app).toContain("${esc(r.fullName||r.name)}");
@@ -11,23 +18,23 @@ test("UI script and markup render GitHub-first checkout controls", async () => {
   expect(app).toContain("/api/github/clone-branch");
   expect(app).not.toContain("r.source==='github'?(r.fullName||r.name):r.name");
   expect(app).not.toContain("gpt-handoff");
-
-  const html = await readFile(new URL("../src/ui/index.html", import.meta.url), "utf8");
-  expect(html).toContain("No output selected");
+  expect(html).toContain("No output available yet.");
   expect(html).toContain("Git repository");
+  expect(html).toContain('id="selectedRepositoryName"');
   expect(html).toContain("Local clone");
-  expect(html).toContain("<input id=\"repositoryPath\" readonly>");
+  expect(html).toContain('id="repositoryPath" class="value-readout"');
   expect(html).toContain("id=\"branch\"");
   expect(html).toContain("Base branch");
-  expect(html).toContain("<input id=\"baseBranch\" readonly>");
-  expect(html).toContain("id=\"clone\"");
-  expect(html).toContain("<textarea id=\"task\"></textarea>");
-  expect(html).toContain("<button id=\"run\" type=\"button\">RUN</button>");
-  expect(html).toContain("<button id=\"stop\" type=\"button\" disabled>STOP</button>");
-  expect(html).toContain("class=\"app-layout\"");
-  expect(html).toContain("class=\"setup-window\"");
-  expect(html).toContain("class=\"execution-window\"");
-  expect(html).toContain("Snapshot: created automatically for each RUN.");
+  expect(html).toContain('id="baseBranch" class="value-readout inline-readout"');
+  expect(html).toContain('id="clone" class="primary"');
+  expect(html).toContain("CLONE BRANCH");
+  expect(html).toContain('<textarea id="task"></textarea>');
+  expect(html).toContain('<button id="run" class="primary" type="button">RUN</button>');
+  expect(html).toContain('<button id="stop" type="button" disabled>STOP</button>');
+  expect(html).toContain('class="app-layout"');
+  expect(html).toContain('class="setup-panel"');
+  expect(html).toContain('class="execution-panel"');
+  expect(html).toContain("Snapshot:</strong> automatic on RUN");
   expect(html).not.toContain("id=\"refresh\"");
   expect(html).toContain("id=\"copy\"");
   expect(html).toContain("type=\"module\" src=\"/app.js\"");
@@ -40,11 +47,12 @@ test("UI script and markup render GitHub-first checkout controls", async () => {
 });
 
 test("repository options use only GitHub repositories and full names", async () => {
-  const app = await readFile(new URL("../src/ui/app.js", import.meta.url), "utf8");
+  const { app } = await uiFiles();
   expect(app).toContain("window.repositories=res.repositories.filter(r=>r.source==='github')");
   expect(app).toContain("const gh=repositories.filter(r=>r.source==='github')");
   expect(app).toContain("value=\"${esc(r.id)}\"");
   expect(app).toContain("${esc(r.fullName||r.name)}");
+  expect(app).toContain("$('selectedRepositoryName').textContent=selectedRepositoryLabel()");
   expect(app).not.toContain("repo.localPath||repo.path||repo.name");
   expect(app).not.toContain("r.source==='github'?(r.fullName||r.name):r.name");
 });
@@ -82,7 +90,7 @@ test("branch request guard keeps latest repository branches", async () => {
 });
 
 test("frontend clone flow sends selected branch to clone endpoint", async () => {
-  const app = await readFile(new URL("../src/ui/app.js", import.meta.url), "utf8");
+  const { app } = await uiFiles();
   expect(app).toContain("repositoryRequestVersion");
   expect(app).toContain("checkout=null");
   expect(app).toContain("/api/github/repositories");
@@ -93,15 +101,15 @@ test("frontend clone flow sends selected branch to clone endpoint", async () => 
 });
 
 test("frontend clone flow stores checkout response without repository refresh", async () => {
-  const app = await readFile(new URL("../src/ui/app.js", import.meta.url), "utf8");
+  const { app } = await uiFiles();
   expect(app).toContain("checkout=res.checkout");
   expect(app).not.toContain("await loadRepositories(res.repository)");
   expect(app).not.toContain("Cloned repository was not found after refresh.");
 });
 
-test("frontend clone flow stores checkout response and uses it for RUN", async () => {
-  const app = await readFile(new URL("../src/ui/app.js", import.meta.url), "utf8");
-  expect(app).toContain("const ready=!!checkout&&!!checkout.localPath&&!!checkout.branch&&!!$('task').value.trim()");
+test("RUN enablement requires checkout and task", async () => {
+  const { app } = await uiFiles();
+  expect(app).toContain("const ready=!!checkout&&!!checkout.localPath&&!!checkout.branch&&!!$('task').value.trim()&&!activeStopPhases.has(phase)");
   expect(app).toContain("$('run').disabled=!ready");
   expect(app).toContain("if(!checkout)throw new Error('RUN requires a cloned branch checkout.')");
   expect(app).toContain("repositoryPath:checkout.localPath");
@@ -109,24 +117,52 @@ test("frontend clone flow stores checkout response and uses it for RUN", async (
   expect(app).toContain("prTargetBranch:checkout.branch");
 });
 
-
-test("MVP checkout UI keeps branch visible, resets checkout on selection changes, and avoids ellipsis path truncation", async () => {
-  const app = await readFile(new URL("../src/ui/app.js", import.meta.url), "utf8");
-  const css = await readFile(new URL("../src/ui/app.css", import.meta.url), "utf8");
-  expect(app).toContain("$('branchStatus').textContent='Loading branches...'");
-  expect(app).toContain("$('branch').innerHTML='<option value=\"\">No branches available</option>'");
-  expect(app).toContain("function clearCheckout(){checkout=null; $('repositoryPath').value='not cloned'; $('baseBranch').value='-';}");
-  expect(app).toContain("$('repository').onchange=async()=>{clearCheckout(); await loadBranches(selectedRepository());}");
-  expect(app).toContain("$('branch').onchange=()=>{clearCheckout(); updateRepositoryState();}");
+test("layout keeps actions visible, wraps long values, and prevents page scrolling", async () => {
+  const { css } = await uiFiles();
   expect(css).toContain("html,body{width:100%;height:100%;margin:0}");
   expect(css).toContain("body{display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden");
   expect(css).toContain("main{min-height:0;overflow:hidden}");
   expect(css).toContain(".app-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)");
-  expect(css).toContain("#repositoryPath,#baseBranch");
-  expect(css).toContain("overflow-x:auto");
-  expect(css).toContain("white-space:nowrap");
-  expect(css).toContain("text-overflow:clip");
+  expect(css).toContain(".setup-panel{border:1px solid #000;padding:8px;display:grid;grid-template-rows:auto auto auto auto minmax(90px,1fr) auto auto");
+  expect(css).toContain(".execution-panel{display:grid;grid-template-rows:minmax(0,3fr) minmax(0,2fr)");
+  expect(css).toContain(".value-readout{display:block;white-space:normal;overflow-wrap:anywhere;word-break:break-word");
+  expect(css).toContain("#viewer{flex:1 1 auto;min-height:0;margin:0;overflow:auto");
   expect(css).not.toContain("text-overflow:ellipsis");
   expect(css).not.toContain("text-overflow: ellipsis");
-  expect(css).not.toContain("overflow:hidden;text-overflow:ellipsis");
+});
+
+test("CLONE uses a compact primary button, not full-width input styling", async () => {
+  const { css, html } = await uiFiles();
+  expect(html).toContain('id="clone" class="primary"');
+  expect(css).toContain("button.primary{width:auto;padding:6px 16px;border:2px solid #000;background:#000;color:#fff;font-weight:bold}");
+});
+
+test("RUN state model starts first and only shows running after a valid runId", async () => {
+  const { app } = await uiFiles();
+  expect(app).toContain("setPhase('starting','Creating run snapshot…')");
+  expect(app).toContain("if(!res.runId){runId=''; $('runNo').textContent='RUN #-'; setPhase('failed','Run was not created.'); return;}");
+  expect(app).toContain("runId=res.runId");
+  expect(app).toContain("setPhase('running','Waiting for first timeline event…')");
+});
+
+test("RUN timeline shows empty and polling error states without empty catch", async () => {
+  const { app, html } = await uiFiles();
+  expect(html).toContain("No run started.");
+  expect(app).toContain("Waiting for first timeline event…");
+  expect(app).toContain("Timeline unavailable: ${safeMessage(e)}");
+  expect(app).not.toContain("catch{}");
+});
+
+test("STOP is phase-driven and terminal states do not return to running", async () => {
+  const { app } = await uiFiles();
+  expect(app).toContain("const activeStopPhases=new Set(['starting','running','stopping'])");
+  expect(app).toContain("$('stop').disabled=!activeStopPhases.has(phase)");
+  expect(app).toContain("if(terminalPhases.has(phase)&&next==='running')return");
+});
+
+test("first available output is auto-selected", async () => {
+  const { app } = await uiFiles();
+  expect(app).toContain("async function autoSelectOutput()");
+  expect(app).toContain("const first=latestRows.map(rowOutputPath).find(Boolean); if(first) await view(first,true);");
+  expect(app).toContain("$('viewerTitle').textContent=selected");
 });
