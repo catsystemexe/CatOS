@@ -46,3 +46,8 @@ button.primary:disabled{background:#fff;color:#555;border-color:#000}
 .output-actions button{height:24px;padding:2px 7px;font-size:12px}
 .completed,.failed,.rework,.running,.human_required,.cancelled,.pending,.final,.add,.del,.stopped{color:#000}
 @media (max-width:800px){.app-layout{grid-template-columns:minmax(0,1fr)}.branch-row{grid-template-columns:minmax(0,1fr)}.execution-panel{grid-template-rows:minmax(0,1fr) auto}}
+.copy-unavailable{background:#f4f4f4;color:#555;border-color:#777}
+.copy-available{background:#000;color:#fff;border:2px solid #000;font-weight:bold}
+.copy-success{background:#fff;color:#000;border:2px solid #000;font-weight:bold;text-decoration:underline}
+.copy-error{background:#fff;color:#000;border:2px dashed #000;font-weight:bold}
+button.copy-available:disabled,button.copy-unavailable:disabled{background:#f4f4f4;color:#555;border:1px solid #777;font-weight:normal}
