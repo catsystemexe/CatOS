@@ -37,13 +37,13 @@ process.once("message", (request) => {
         sandboxMode: request.sandboxMode,
         approvalPolicy: request.approvalPolicy,
       }),
-    },
-    diagnostics: {
-      sdkOptions: { workingDirectory: request.workingDirectory, sandboxMode: request.sandboxMode, approvalPolicy: request.approvalPolicy },
-      sandboxModeRequested: request.sandboxMode,
-      sandboxModeEffective: "unconfirmed",
-      approvalPolicy: request.approvalPolicy,
-      childCwd: process.cwd(),
+      diagnostics: {
+        sdkOptions: { workingDirectory: request.workingDirectory, sandboxMode: request.sandboxMode, approvalPolicy: request.approvalPolicy },
+        sandboxModeRequested: request.sandboxMode,
+        sandboxModeEffective: "unconfirmed",
+        approvalPolicy: request.approvalPolicy,
+        childCwd: process.cwd(),
+      },
     },
   });
 });

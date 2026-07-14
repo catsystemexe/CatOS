@@ -399,9 +399,10 @@ describe("CodexSdkWorker", () => {
     let spawned = false;
     const worker = new CodexSdkWorker({
       codexRuntimeRunner: async () => { spawned = true; return { threadId: "bad", finalResponse: "bad" }; },
+      workspaceProbeOpen: async () => { throw Object.assign(new Error("injected probe write failure"), { code: "EACCES" }); },
     });
 
-    await expect(worker.executeTask({ instruction: "x", repositoryPath: repo, baseBranch: "main", runId: "nonwrite", workspaceRoot, workspacePath: repo })).rejects.toThrow(/Codex workspace must not be the target repository root|already registered/);
+    await expect(worker.executeTask({ instruction: "x", repositoryPath: repo, baseBranch: "main", runId: "nonwrite", workspaceRoot })).rejects.toThrow(/WORKSPACE_NOT_WRITABLE: coordinator write probe failed/);
     expect(spawned).toBe(false);
   });
 
