@@ -15,26 +15,27 @@ function rel(runDir: string, file: string | undefined): { label: string; path: s
 
 export async function buildUiTimeline(runDir: string): Promise<UiTimelineRow[]> {
   const rows: UiTimelineRow[] = [];
-  const taskBrief = (await exists(path.join(runDir, "task-brief.json"))) ? "task-brief.json" : undefined;
   const session = await readJson<Session>(path.join(runDir, "session.json"));
-  if (taskBrief || session) rows.push({ order: rows.length + 1, type: "analysis", label: "ANALYSIS", status: taskBrief ? "completed" : "running", output: rel(runDir, taskBrief) });
+  if (!session) return rows;
   const attempts = (await findFiles(path.join(runDir, "steps"), "attempt.json"))
     .concat(await findFiles(path.join(runDir, "attempts"), "attempt.json"));
   const parsed = (await Promise.all(attempts.map(async f => ({ file: f, attempt: await readJson<Attempt>(f) })))).filter((x): x is { file: string; attempt: Attempt } => !!x.attempt).sort((a,b) => a.attempt.order - b.attempt.order || a.file.localeCompare(b.file));
   for (const { file, attempt } of parsed) {
     const dir = path.dirname(file);
     const isRework = attempt.order > 1 || path.relative(runDir, dir).startsWith("attempts");
-    const coding = attempt.artifacts.codingResultPath ?? (await exists(path.join(dir, "coding-result.json")) ? path.relative(runDir, path.join(dir, "coding-result.json")) : undefined);
+    const stepRoot = dir.split(`${path.sep}attempts${path.sep}`)[0];
+    const handoff = (await exists(path.join(stepRoot, "gpt-handoff.md"))) ? path.relative(runDir, path.join(stepRoot, "gpt-handoff.md")) : undefined;
+    const coding = handoff ?? attempt.artifacts.codingResultPath ?? (await exists(path.join(dir, "coding-result.json")) ? path.relative(runDir, path.join(dir, "coding-result.json")) : undefined);
     rows.push({ order: rows.length + 1, type: "codex", label: isRework ? `CODEX (REWORK #${Math.max(1, attempt.order - 1)})` : "CODEX", status: attempt.status === "running" ? "running" : attempt.status === "cancelled" ? "cancelled" : attempt.status === "failed" ? "failed" : "completed", output: rel(runDir, coding), durationSeconds: dur(attempt.startedAt, attempt.completedAt) });
     const validation = attempt.artifacts.validationReportPath ?? (await exists(path.join(dir, "validation-report.json")) ? path.relative(runDir, path.join(dir, "validation-report.json")) : undefined);
     if (validation) {
       const vr = await readJson<{ status?: string }>(path.join(runDir, validation));
-      rows.push({ order: rows.length + 1, type: "validation", label: "VALIDATION", status: vr?.status === "PASS" ? "completed" : "failed", output: rel(runDir, validation) });
+      rows.push({ order: rows.length + 1, type: "validation", label: "VALIDATION", status: vr?.status === "PASS" ? "completed" : "failed", output: rel(runDir, handoff ?? validation) });
     }
     const review = attempt.artifacts.reviewReportPath ?? (await exists(path.join(dir, "review-report.json")) ? path.relative(runDir, path.join(dir, "review-report.json")) : undefined);
     if (review) {
       const rr = await readJson<{ verdict?: string }>(path.join(runDir, review));
-      rows.push({ order: rows.length + 1, type: "review", label: "REVIEW", status: rr?.verdict === "ACCEPT" ? "completed" : rr?.verdict === "REWORK" ? "rework" : rr?.verdict === "HUMAN_REQUIRED" ? "rework" : "failed", output: rel(runDir, review) });
+      rows.push({ order: rows.length + 1, type: "review", label: "REVIEW", status: rr?.verdict === "ACCEPT" ? "completed" : rr?.verdict === "REWORK" ? "rework" : rr?.verdict === "HUMAN_REQUIRED" ? "rework" : "failed", output: rel(runDir, handoff ?? review) });
     }
   }
   return rows.map((r, i) => ({ ...r, order: i + 1 }));

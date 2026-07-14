@@ -316,6 +316,7 @@ export async function createStep(input: {
         },
         createdAt,
       );
+      await import("../gptStepHandoff.js").then(m=>m.writeGptStepHandoff(input.runDir,current,current.status)).catch(()=>undefined);
     }
   }
   const stepId = newId("step");
@@ -507,6 +508,7 @@ export async function completeAttempt(input: {
     },
     completedAt,
   );
+  await import("../gptStepHandoff.js").then(m=>m.writeGptStepHandoff(input.runDir,input.step,"awaiting_decision")).catch(async(e)=>{ await appendTimelineEvent(input.runDir,{type:"gpt_handoff.failed",sessionId:session.sessionId,stepId:input.step.stepId,metadata:{error:e instanceof Error?e.message:String(e),handoffStatus:"awaiting_decision"}}); });
   return updated;
 }
 export function artifactRefs(
@@ -629,6 +631,7 @@ export async function recordDecision(input: {
       createdAt,
     );
   await writeStepSummary(input.runDir, step, decision);
+  await import("../gptStepHandoff.js").then(m=>m.writeGptStepHandoff(input.runDir,step,step.status)).catch(async(e)=>{ await appendTimelineEvent(input.runDir,{type:"gpt_handoff.failed",sessionId:session.sessionId,stepId:step.stepId,metadata:{error:e instanceof Error?e.message:String(e),handoffStatus:step.status}}); });
   return decision;
 }
 export async function writeStepSummary(
