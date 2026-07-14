@@ -6,6 +6,7 @@ import { reviewCommand } from "./cli/review.js";
 import { continuePackageCommand } from "./cli/continuePackage.js";
 import { runStepCommand } from "./cli/runStep.js";
 import { uiCommand } from "./uiServer.js";
+import { runtimeWriteSmokeCommand } from "./cli/runtimeWriteSmoke.js";
 
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
@@ -45,12 +46,17 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "runtime-write-smoke") {
+    await runtimeWriteSmokeCommand(args);
+    return;
+  }
+
   if (command === "ui") {
     await uiCommand(args);
     return;
   }
 
-  throw new Error("Neznámý nebo chybějící příkaz. Použití: npm run catos -- run --project demo --task \"Testovací úkol\" nebo npm run catos -- decide --run <runId> --decision approve nebo npm run catos -- step --run <runId> --title \"Další krok\" --request \"Zadání\" nebo npm run catos -- commit --run <runId> nebo npm run catos -- review --run <runId> nebo npm run catos -- continue-package --run <runId> nebo npm run catos -- run-step --run <runId> nebo npm run ui");
+  throw new Error("Neznámý nebo chybějící příkaz. Použití: npm run catos -- run --project demo --task \"Testovací úkol\" nebo npm run catos -- decide --run <runId> --decision approve nebo npm run catos -- step --run <runId> --title \"Další krok\" --request \"Zadání\" nebo npm run catos -- commit --run <runId> nebo npm run catos -- review --run <runId> nebo npm run catos -- continue-package --run <runId> nebo npm run catos -- run-step --run <runId> nebo npm run catos -- runtime-write-smoke --repo <path> --base-branch autocodex nebo npm run ui");
 }
 
 main().catch((error: unknown) => {

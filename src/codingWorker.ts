@@ -1,4 +1,4 @@
-import { access, lstat, mkdir, realpath, stat, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, open, realpath, stat, unlink, writeFile } from "node:fs/promises";
 import type { ReworkPackage } from "./schemas/reworkPackage.js";
 import path from "node:path";
 import { execFile, fork } from "node:child_process";
@@ -16,6 +16,8 @@ function resolveTsxImport(): string {
 
 
 const execFileAsync = promisify(execFile);
+const R_OK = 4;
+const W_OK = 2;
 
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 export type SandboxIsolation = "enabled" | "disabled";
@@ -72,6 +74,7 @@ export type CodexRuntimeRequest =
       mode: "start";
       workingDirectory: string;
       sandboxMode: SandboxMode;
+      approvalPolicy: "never";
       model?: string;
       instruction: string;
     }
@@ -80,13 +83,23 @@ export type CodexRuntimeRequest =
       threadId: string;
       workingDirectory: string;
       sandboxMode: SandboxMode;
+      approvalPolicy: "never";
       model?: string;
       instruction: string;
     };
 
+export type CodexRuntimeDiagnostics = {
+  sdkOptions?: Record<string, unknown>;
+  sandboxModeRequested?: SandboxMode;
+  sandboxModeEffective?: SandboxMode | "unconfirmed";
+  approvalPolicy?: "never";
+  childCwd?: string;
+};
+
 export type CodexRuntimeResult = {
   threadId: string;
   finalResponse: string;
+  diagnostics?: CodexRuntimeDiagnostics;
 };
 
 export type CodexRuntimeLogSummary = {
@@ -124,6 +137,22 @@ export type RuntimeManifest = {
   homePath: string;
   tmpdirPath: string;
   network: "unrestricted";
+  requestedWorkspacePath: string;
+  resolvedWorkspacePath: string;
+  childCwd?: string;
+  workspaceWritable: boolean;
+  workspaceWriteProbe: "passed" | "failed";
+  sandboxModeRequested: SandboxMode;
+  sandboxModeEffective: SandboxMode | "unconfirmed";
+  approvalPolicy: "never";
+  runtimeChildPid?: number;
+  processUid?: number;
+  processGid?: number;
+  directoryOwnerUid?: number;
+  directoryOwnerGid?: number;
+  directoryMode?: string;
+  gitStatus?: string;
+  gitBranch?: string;
   startedAt: string;
 };
 
@@ -207,7 +236,43 @@ export async function guardCodexWorkspace(input: { workspacePath: string; worksp
   return { workspacePath: realWorkspacePath, workspaceRoot: realWorkspaceRoot };
 }
 
-async function prepareRuntime(input: { workspacePath: string; workspaceRoot: string; sandboxMode: SandboxMode; sandboxIsolation: SandboxIsolation }): Promise<{ env: NodeJS.ProcessEnv; manifest: RuntimeManifest; runtimeDir: string }> {
+
+export async function probeWorkspaceWritable(input: { workspacePath: string; workspaceRoot: string; repositoryPath?: string; runId?: string; git?: (args: string[], cwd?: string) => Promise<GitResult> }): Promise<{ writable: true; probe: Record<string, unknown> }> {
+  const requestedWorkspacePath = path.resolve(input.workspacePath);
+  const resolvedWorkspacePath = await realpath(input.workspacePath);
+  const resolvedWorkspaceRoot = await realpath(input.workspaceRoot);
+  const directory = await stat(resolvedWorkspacePath);
+  if (!isPathInside(resolvedWorkspaceRoot, resolvedWorkspacePath)) throw new Error(`WORKSPACE_NOT_WRITABLE: workspace is outside isolated run root. workspace=${resolvedWorkspacePath} root=${resolvedWorkspaceRoot}`);
+  if (input.repositoryPath && resolvedWorkspacePath === await realpathIfExists(input.repositoryPath)) throw new Error("WORKSPACE_NOT_WRITABLE: workspace resolves to the source clone.");
+  await access(resolvedWorkspacePath, R_OK | W_OK);
+  const probeName = `.write-probe-${sanitizeRunIdForPath(input.runId ?? "run")}`;
+  const probePath = path.join(resolvedWorkspacePath, probeName);
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(probePath, "wx");
+    await handle.writeFile("workspace write probe\n", "utf8");
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await access(probePath, R_OK);
+  } catch (error) {
+    try { if (handle) await handle.close(); } catch {}
+    try { await unlink(probePath); } catch {}
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`WORKSPACE_NOT_WRITABLE: coordinator write probe failed for ${resolvedWorkspacePath}: ${message}`);
+  } finally {
+    try { await unlink(probePath); } catch {}
+  }
+  const gitStatus = input.git ? (await input.git(["status", "--porcelain=v1", "--untracked-files=all"], resolvedWorkspacePath)).stdout : undefined;
+  const gitBranch = input.git ? (await input.git(["branch", "--show-current"], resolvedWorkspacePath)).stdout.trim() || "DETACHED" : undefined;
+  return { writable: true, probe: { requestedWorkspacePath, resolvedWorkspacePath, workspaceWritable: true, workspaceWriteProbe: "passed", processUid: process.getuid?.(), processGid: process.getgid?.(), directoryOwnerUid: directory.uid, directoryOwnerGid: directory.gid, directoryMode: `0${(directory.mode & 0o777).toString(8)}`, gitStatus, gitBranch } };
+}
+
+async function writeRuntimeManifest(runtimeDir: string, manifest: RuntimeManifest): Promise<void> {
+  await writeFile(path.join(runtimeDir, "runtime.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+}
+
+async function prepareRuntime(input: { workspacePath: string; workspaceRoot: string; sandboxMode: SandboxMode; sandboxIsolation: SandboxIsolation; probe: Record<string, unknown> }): Promise<{ env: NodeJS.ProcessEnv; manifest: RuntimeManifest; runtimeDir: string }> {
   const runtimeDir = path.join(path.dirname(input.workspacePath), "runtime");
   const homePath = path.join(runtimeDir, "home");
   const tmpdirPath = path.join(runtimeDir, "tmp");
@@ -230,9 +295,23 @@ async function prepareRuntime(input: { workspacePath: string; workspaceRoot: str
     homePath,
     tmpdirPath,
     network: "unrestricted",
+    requestedWorkspacePath: String(input.probe.requestedWorkspacePath),
+    resolvedWorkspacePath: String(input.probe.resolvedWorkspacePath),
+    workspaceWritable: true,
+    workspaceWriteProbe: "passed",
+    sandboxModeRequested: input.sandboxMode,
+    sandboxModeEffective: "unconfirmed",
+    approvalPolicy: "never",
+    processUid: input.probe.processUid as number | undefined,
+    processGid: input.probe.processGid as number | undefined,
+    directoryOwnerUid: input.probe.directoryOwnerUid as number | undefined,
+    directoryOwnerGid: input.probe.directoryOwnerGid as number | undefined,
+    directoryMode: input.probe.directoryMode as string | undefined,
+    gitStatus: input.probe.gitStatus as string | undefined,
+    gitBranch: input.probe.gitBranch as string | undefined,
     startedAt: new Date().toISOString(),
   };
-  await writeFile(path.join(runtimeDir, "runtime.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  await writeRuntimeManifest(runtimeDir, manifest);
   return { env, manifest, runtimeDir };
 }
 
@@ -361,6 +440,25 @@ function formatChildError(error: unknown): string {
   return String(error ?? "unknown error");
 }
 
+
+export function codexSandboxWriteFailure(input: { error: unknown; stderr?: string; sandboxModeRequested: SandboxMode; sandboxModeEffective?: SandboxMode | "unconfirmed"; workspaceWritableByCoordinator?: boolean; workspacePath?: string }): { code: "CODEX_SANDBOX_WRITE_FAILED"; message: string; details: Record<string, unknown> } | null {
+  const originalMessage = formatChildError(input.error);
+  const joined = `${originalMessage}\n${input.stderr ?? ""}`;
+  if (!/(sandbox|permission denied|operation not permitted|read-only|EROFS|EACCES|EPERM|write)/i.test(joined)) return null;
+  return {
+    code: "CODEX_SANDBOX_WRITE_FAILED",
+    message: "Codex could not write to the isolated workspace.",
+    details: {
+      originalMessage,
+      stderrExcerpt: input.stderr?.slice(0, 4000),
+      sandboxModeRequested: input.sandboxModeRequested,
+      sandboxModeEffective: input.sandboxModeEffective ?? "unconfirmed",
+      workspaceWritableByCoordinator: input.workspaceWritableByCoordinator,
+      workspacePath: input.workspacePath ? "<run-workspace>" : undefined,
+    },
+  };
+}
+
 function resolveCodexRuntimeTimeoutMs(configured?: number): number {
   if (configured !== undefined) return configured;
   const raw = process.env.CATOS_CODEX_RUNTIME_TIMEOUT_MS;
@@ -396,10 +494,11 @@ async function writeRuntimeLogs(runtimeDir: string, stdout: Buffer, stderr: Buff
   };
 }
 
-async function writeRuntimeError(runtimeDir: string, reason: string, logSummary: CodexRuntimeLogSummary): Promise<void> {
+async function writeRuntimeError(runtimeDir: string, reason: string, logSummary: CodexRuntimeLogSummary, rootCause?: unknown): Promise<void> {
   await writeFile(path.join(runtimeDir, "codex-runtime-error.json"), `${JSON.stringify({
     schemaVersion: 1,
     reason,
+    rootCause,
     logSummary,
     recordedAt: new Date().toISOString(),
   }, null, 2)}\n`, "utf8");
@@ -442,15 +541,27 @@ async function runForkedCodexRuntime(input: { request: CodexRuntimeRequest; env:
   };
   child.stdout?.on("data", onStdout);
   child.stderr?.on("data", onStderr);
+  const manifestPath = path.join(input.runtimeDir, "runtime.json");
+  void (async () => {
+    try {
+      const manifest = JSON.parse(await (await import("node:fs/promises")).readFile(manifestPath, "utf8")) as RuntimeManifest;
+      manifest.childCwd = input.cwd;
+      manifest.runtimeChildPid = child.pid;
+      manifest.sandboxModeRequested = input.request.sandboxMode;
+      manifest.sandboxModeEffective = "unconfirmed";
+      manifest.approvalPolicy = "never";
+      await writeRuntimeManifest(input.runtimeDir, manifest);
+    } catch {}
+  })();
 
   return await new Promise<CodexRuntimeResult>((resolve, reject) => {
     let settled = false;
     let messageReceived = false;
     let timeout: NodeJS.Timeout | undefined;
 
-    async function finishLogs(reason?: string): Promise<void> {
+    async function finishLogs(reason?: string, rootCause?: unknown): Promise<void> {
       const logSummary = await writeRuntimeLogs(input.runtimeDir, stdout, stderr, stdoutTruncated, stderrTruncated);
-      if (reason) await writeRuntimeError(input.runtimeDir, reason, logSummary);
+      if (reason) await writeRuntimeError(input.runtimeDir, reason, logSummary, rootCause);
     }
 
     function cleanup(): void {
@@ -471,7 +582,7 @@ async function runForkedCodexRuntime(input: { request: CodexRuntimeRequest; env:
       if (settled) return;
       settled = true;
       terminateChild();
-      void finishLogs(reason).finally(() => {
+      void finishLogs(reason, (error as Error & { rootCause?: unknown }).rootCause).finally(() => {
         cleanup();
         reject(error);
       });
@@ -507,12 +618,14 @@ async function runForkedCodexRuntime(input: { request: CodexRuntimeRequest; env:
       if (payload.ok === true && payload.result && typeof payload.result === "object") {
         const result = payload.result as Partial<CodexRuntimeResult>;
         if (typeof result.threadId === "string" && typeof result.finalResponse === "string") {
-          settleWithSuccess({ threadId: result.threadId, finalResponse: result.finalResponse });
+          settleWithSuccess({ threadId: result.threadId, finalResponse: result.finalResponse, diagnostics: result.diagnostics });
           return;
         }
       }
       if (payload.ok === false) {
-        settleWithError(new Error(`Codex runtime worker SDK error:\n${formatChildError(payload.error)}${stderr.byteLength > 0 ? `\n\nstderr:\n${stderr.toString("utf8")}` : ""}`), "sdk-error");
+        const sdkError = new Error(`Codex runtime worker SDK error:\n${formatChildError(payload.error)}${stderr.byteLength > 0 ? `\n\nstderr:\n${stderr.toString("utf8")}` : ""}`) as Error & { rootCause?: unknown };
+        sdkError.rootCause = codexSandboxWriteFailure({ error: payload.error, stderr: stderr.toString("utf8"), sandboxModeRequested: input.request.sandboxMode, sandboxModeEffective: "unconfirmed", workspaceWritableByCoordinator: true, workspacePath: input.cwd });
+        settleWithError(sdkError, "sdk-error");
         return;
       }
       settleWithError(new Error("Codex runtime worker returned malformed result."), "malformed-result");
@@ -537,6 +650,18 @@ async function runForkedCodexRuntime(input: { request: CodexRuntimeRequest; env:
       if (error) settleWithError(new Error(`Failed to send Codex runtime request: ${error.message}`), "send-error");
     });
   });
+}
+
+
+async function updateRuntimeManifestFromResult(runtimeDir: string, result: CodexRuntimeResult): Promise<void> {
+  try {
+    const { readFile } = await import("node:fs/promises");
+    const manifest = JSON.parse(await readFile(path.join(runtimeDir, "runtime.json"), "utf8")) as RuntimeManifest & { sdkOptions?: Record<string, unknown> };
+    if (result.diagnostics?.childCwd) manifest.childCwd = result.diagnostics.childCwd;
+    if (result.diagnostics?.sandboxModeEffective) manifest.sandboxModeEffective = result.diagnostics.sandboxModeEffective;
+    if (result.diagnostics?.sdkOptions) manifest.sdkOptions = result.diagnostics.sdkOptions;
+    await writeRuntimeManifest(runtimeDir, manifest);
+  } catch {}
 }
 
 export class CodexSdkWorker implements CodingWorker {
@@ -593,7 +718,8 @@ export class CodexSdkWorker implements CodingWorker {
     }
 
     const guarded = await guardCodexWorkspace({ workspacePath, workspaceRoot: input.workspaceRoot, repositoryPath, catosRoot: this.catosRoot });
-    const runtime = await prepareRuntime({ workspacePath: guarded.workspacePath, workspaceRoot: guarded.workspaceRoot, sandboxMode, sandboxIsolation });
+    const writeProbe = await probeWorkspaceWritable({ workspacePath: guarded.workspacePath, workspaceRoot: guarded.workspaceRoot, repositoryPath, runId: input.runId, git: this.git });
+    const runtime = await prepareRuntime({ workspacePath: guarded.workspacePath, workspaceRoot: guarded.workspaceRoot, sandboxMode, sandboxIsolation, probe: writeProbe.probe });
     const model = process.env.CATOS_CODEX_MODEL;
     const runtimeResult = await this.codexRuntimeRunner({
       env: runtime.env,
@@ -603,11 +729,13 @@ export class CodexSdkWorker implements CodingWorker {
         mode: "start",
         workingDirectory: guarded.workspacePath,
         sandboxMode,
+        approvalPolicy: "never",
         ...(model ? { model } : {}),
         instruction: buildCodexInstruction(input.instruction),
       },
     });
 
+    await updateRuntimeManifestFromResult(runtime.runtimeDir, runtimeResult);
     return await this.collectResult({
       threadId: runtimeResult.threadId,
       finalResponse: runtimeResult.finalResponse,
@@ -631,7 +759,8 @@ export class CodexSdkWorker implements CodingWorker {
     const sandboxMode = input.sandboxMode ?? "workspace-write";
     const sandboxIsolation = sandboxMode === "danger-full-access" ? "disabled" : "enabled";
     const guarded = await guardCodexWorkspace({ workspacePath: input.workspacePath, workspaceRoot: input.workspaceRoot, catosRoot: this.catosRoot });
-    const runtime = await prepareRuntime({ workspacePath: guarded.workspacePath, workspaceRoot: guarded.workspaceRoot, sandboxMode, sandboxIsolation });
+    const writeProbe = await probeWorkspaceWritable({ workspacePath: guarded.workspacePath, workspaceRoot: guarded.workspaceRoot, runId: input.threadId ?? "continue", git: this.git });
+    const runtime = await prepareRuntime({ workspacePath: guarded.workspacePath, workspaceRoot: guarded.workspaceRoot, sandboxMode, sandboxIsolation, probe: writeProbe.probe });
     const model = process.env.CATOS_CODEX_MODEL;
     const runtimeResult = await this.codexRuntimeRunner({
       env: runtime.env,
@@ -641,10 +770,12 @@ export class CodexSdkWorker implements CodingWorker {
         ...(input.threadId ? { mode: "continue" as const, threadId: input.threadId } : { mode: "start" as const }),
         workingDirectory: guarded.workspacePath,
         sandboxMode,
+        approvalPolicy: "never",
         ...(model ? { model } : {}),
         instruction: input.instruction,
       },
     });
+    await updateRuntimeManifestFromResult(runtime.runtimeDir, runtimeResult);
     return await this.collectResult({
       threadId: runtimeResult.threadId,
       finalResponse: runtimeResult.finalResponse,
