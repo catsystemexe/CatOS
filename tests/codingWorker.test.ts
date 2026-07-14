@@ -4,7 +4,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { buildIsolatedWorkspacePath, CodexSdkWorker, createForkedCodexRuntimeRunner, guardCodexWorkspace, normalizeWorkBranchName, writeCodingArtifacts, type CodingResult } from "../src/codingWorker.js";
+import { buildIsolatedWorkspacePath, codexSandboxWriteFailure, CodexSdkWorker, createForkedCodexRuntimeRunner, guardCodexWorkspace, normalizeWorkBranchName, probeWorkspaceWritable, writeCodingArtifacts, type CodingResult } from "../src/codingWorker.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -342,6 +342,83 @@ describe("CodexSdkWorker", () => {
       if (previousGithubToken === undefined) delete process.env.GITHUB_TOKEN; else process.env.GITHUB_TOKEN = previousGithubToken;
       if (previousSecret === undefined) delete process.env.MY_PRIVATE_API_KEY; else process.env.MY_PRIVATE_API_KEY = previousSecret;
     }
+  });
+
+  it("records coordinator write probe, child cwd, sandbox request, and SDK options in runtime manifest", async () => {
+    const repo = await createRepo("main");
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "catos-runtime-manifest-"));
+    const childPath = path.resolve("tests/fixtures/codexRuntimeFakeChild.cjs");
+    const worker = new CodexSdkWorker({ codexRuntimeRunner: createForkedCodexRuntimeRunner({ childPath, timeoutMs: 10_000 }) });
+
+    const result = await worker.executeTask({ instruction: "Inspect runtime", repositoryPath: repo, baseBranch: "main", runId: "manifest", workspaceRoot, sandboxMode: "danger-full-access" });
+
+    const runtimeDir = path.join(workspaceRoot, "manifest", "runtime");
+    const manifest = JSON.parse(await readFile(path.join(runtimeDir, "runtime.json"), "utf8"));
+    expect(manifest.requestedWorkspacePath).toBe(path.join(workspaceRoot, "manifest", "workspace"));
+    expect(manifest.resolvedWorkspacePath).toBe(path.join(workspaceRoot, "manifest", "workspace"));
+    expect(manifest.childCwd).toBe(result.workspacePath);
+    expect(manifest.workspaceWritable).toBe(true);
+    expect(manifest.workspaceWriteProbe).toBe("passed");
+    expect(manifest.sandboxModeRequested).toBe("danger-full-access");
+    expect(manifest.sandboxModeEffective).toBe("unconfirmed");
+    expect(manifest.approvalPolicy).toBe("never");
+    expect(manifest.sdkOptions).toMatchObject({ workingDirectory: result.workspacePath, sandboxMode: "danger-full-access", approvalPolicy: "never" });
+    expect(typeof manifest.runtimeChildPid).toBe("number");
+    expect(JSON.stringify(manifest)).not.toContain("secret-value");
+  });
+
+  it("runs a Codex runtime write smoke test through the child and leaves source clone clean", async () => {
+    const repo = await createRepo("main");
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "catos-runtime-write-"));
+    const childPath = path.resolve("tests/fixtures/codexRuntimeFakeChild.cjs");
+    const worker = new CodexSdkWorker({ codexRuntimeRunner: createForkedCodexRuntimeRunner({ childPath, timeoutMs: 10_000 }) });
+
+    const result = await worker.executeTask({ instruction: "MODE=WRITE_TEST", repositoryPath: repo, baseBranch: "main", runId: "write", workspaceRoot, sandboxMode: "danger-full-access" });
+
+    expect(await readFile(path.join(result.workspacePath, "AUTOCODEX_RUNTIME_WRITE_TEST.txt"), "utf8")).toBe("runtime write succeeded");
+    expect(result.changedFiles).toEqual(["AUTOCODEX_RUNTIME_WRITE_TEST.txt"]);
+    await expect(git(["status", "--short"], repo)).resolves.toBe("");
+  });
+
+  it("coordinator workspace write probe succeeds and removes its probe file", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "catos-probe-root-"));
+    const workspace = path.join(workspaceRoot, "run", "workspace");
+    await mkdir(workspace, { recursive: true });
+    await git(["init", "-b", "main"], workspace);
+
+    const result = await probeWorkspaceWritable({ workspacePath: workspace, workspaceRoot, runId: "probe", git: async (args, cwd) => ({ stdout: await git(args, cwd!), stderr: "" }) });
+
+    expect(result.writable).toBe(true);
+    expect(result.probe.workspaceWritable).toBe(true);
+    await expect(readFile(path.join(workspace, ".write-probe-probe"), "utf8")).rejects.toThrow();
+  });
+
+  it("fails before Codex spawn when coordinator write probe cannot create the probe file", async () => {
+    const repo = await createRepo("main");
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "catos-nonwritable-"));
+    let spawned = false;
+    const worker = new CodexSdkWorker({
+      codexRuntimeRunner: async () => { spawned = true; return { threadId: "bad", finalResponse: "bad" }; },
+    });
+
+    await expect(worker.executeTask({ instruction: "x", repositoryPath: repo, baseBranch: "main", runId: "nonwrite", workspaceRoot, workspacePath: repo })).rejects.toThrow(/Codex workspace must not be the target repository root|already registered/);
+    expect(spawned).toBe(false);
+  });
+
+  it("preserves sandbox write failures as CODEX_SANDBOX_WRITE_FAILED root cause", async () => {
+    const rootCause = codexSandboxWriteFailure({
+      error: { name: "SandboxError", message: "failed to write file: Permission denied (os error 13)" },
+      stderr: "",
+      sandboxModeRequested: "danger-full-access",
+      sandboxModeEffective: "unconfirmed",
+      workspaceWritableByCoordinator: true,
+      workspacePath: "/tmp/workspace",
+    });
+    expect(rootCause).toMatchObject({
+      code: "CODEX_SANDBOX_WRITE_FAILED",
+      details: { sandboxModeRequested: "danger-full-access", sandboxModeEffective: "unconfirmed", workspaceWritableByCoordinator: true },
+    });
+    expect(JSON.stringify(rootCause)).not.toContain("sk-");
   });
 
   it("reports forked runtime exit, malformed IPC, timeout, and supports continuation", async () => {

@@ -6,10 +6,12 @@ type CodexThread = {
   run(instruction: string): Promise<unknown>;
 };
 
+type CodexOptions = { workingDirectory: string; sandboxMode?: SandboxMode; approvalPolicy?: "never"; model?: string };
+
 type CodexClient = {
-  startThread(options: { workingDirectory: string; sandboxMode?: SandboxMode; model?: string }): CodexThread;
-  resumeThread?: (threadId: string, options: { workingDirectory: string; sandboxMode?: SandboxMode; model?: string }) => CodexThread;
-  continueThread?: (threadId: string, options: { workingDirectory: string; sandboxMode?: SandboxMode; model?: string }) => CodexThread;
+  startThread(options: CodexOptions): CodexThread;
+  resumeThread?: (threadId: string, options: CodexOptions) => CodexThread;
+  continueThread?: (threadId: string, options: CodexOptions) => CodexThread;
 };
 
 type CodexConstructor = new () => CodexClient;
@@ -63,9 +65,10 @@ async function loadCodex(): Promise<CodexClient> {
 
 async function runCodex(request: CodexRuntimeRequest): Promise<CodexRuntimeResult> {
   const codex = await loadCodex();
-  const options = {
+  const options: CodexOptions = {
     workingDirectory: request.workingDirectory,
     sandboxMode: request.sandboxMode,
+    approvalPolicy: "never",
     ...(request.model ? { model: request.model } : {}),
   };
   const thread = request.mode === "start"
@@ -79,6 +82,13 @@ async function runCodex(request: CodexRuntimeRequest): Promise<CodexRuntimeResul
   return {
     threadId: thread.id ?? thread.threadId ?? (request.mode === "continue" ? request.threadId : "unknown"),
     finalResponse: stringifyCodexTurn(turn),
+    diagnostics: {
+      sdkOptions: options as unknown as Record<string, unknown>,
+      sandboxModeRequested: request.sandboxMode,
+      sandboxModeEffective: "unconfirmed",
+      approvalPolicy: "never",
+      childCwd: process.cwd(),
+    },
   };
 }
 
