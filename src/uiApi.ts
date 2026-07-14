@@ -4,8 +4,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { parse } from "yaml";
 import { ZodError } from "zod";
 import { loadProjectConfig } from "./config/loadConfig.js";
-import { loadRepositoryRoots, discoverRepositories, listRepositoryBranches, validateManualRepository } from "./repositoryDiscovery.js";
-import { CloneRepositoryError, cloneGithubRepository, githubBranches, githubRepos, mergeRepositories, type ExecLike, type FetchLike, type GithubRepo, type GithubStatus } from "./githubRepositories.js";
+import { listRepositoryBranches, validateManualRepository } from "./repositoryDiscovery.js";
+import { CloneRepositoryError, cloneGithubRepository, githubBranches, githubRepos, type ExecLike, type FetchLike, type GithubRepo, type GithubStatus } from "./githubRepositories.js";
 import { projectConfigSchema } from "./config/projectConfigSchema.js";
 import { buildUiSystemState, buildUiTimeline, getUiRunStatus } from "./uiViewModel.js";
 import { writeSessionReport } from "./finalExport.js";
@@ -43,7 +43,8 @@ export async function listProjects(ctx: UiContext = {}): Promise<UiProjectSummar
     }catch(error){ if(error instanceof ZodError) return invalidSummary(f,"invalid project config",parsed); return invalidSummary(f,"invalid project config",parsed); } })); }
 
 export type UiStartRunInput = { repositoryPath: string; baseBranch: string; prTargetBranch: string; task: string };
-export async function listRepositories(ctx:UiContext={}){ const local=await discoverRepositories(await loadRepositoryRoots(cwdOf(ctx)), cwdOf(ctx),3,ctx.env??process.env); const noGithubExec:ExecLike=async()=>{throw new Error("GitHub CLI disabled by explicit UI context env.");}; const gh=ctx.githubProvider ? await ctx.githubProvider() : await githubRepos(ctx.githubExec ?? (ctx.env ? noGithubExec : undefined), ctx.env ?? process.env, ctx.githubFetch); return {repositories: await mergeRepositories(local,gh.repositories,undefined,ctx.env??process.env), github: gh.github}; }
+function githubRepositoryOption(repo:GithubRepo){ return {id:`github:${repo.fullName}`,source:"github" as const,name:repo.fullName,fullName:repo.fullName,cloneUrl:repo.cloneUrl,defaultBranch:repo.defaultBranch,isPrivate:repo.isPrivate,isAvailableLocally:false}; }
+export async function listRepositories(ctx:UiContext={}){ const noGithubExec:ExecLike=async()=>{throw new Error("GitHub CLI disabled by explicit UI context env.");}; const gh=ctx.githubProvider ? await ctx.githubProvider() : await githubRepos(ctx.githubExec ?? (ctx.env ? noGithubExec : undefined), ctx.env ?? process.env, ctx.githubFetch); const repositories=gh.repositories.map(githubRepositoryOption); return {repositories, total:repositories.length, githubCount:repositories.length, localCount:0, github: gh.github}; }
 export type CloneRepositoryInput={repositoryId:string;branch:string};
 export async function cloneRepository(input:CloneRepositoryInput, ctx:UiContext={}){ const listed=await listRepositories(ctx); const result=await cloneGithubRepository(input.repositoryId,input.branch,listed.repositories,ctx.githubExec,ctx.env ?? process.env); return result; }
 export async function loadManualRepository(repositoryPath:string){ return {repository: await validateManualRepository(repositoryPath), branches: await listRepositoryBranches(repositoryPath)}; }
