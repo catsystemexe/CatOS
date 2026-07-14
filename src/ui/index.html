@@ -1,1 +1,38 @@
-<!doctype html><html><head><meta charset="utf-8"><title>CatOS AutoCodex</title><link rel="stylesheet" href="/app.css"></head><body><header><span>CatOS</span><span id="runNo">RUN #-</span><span id="status">idle</span><span id="elapsed">00:00</span></header><main><section><h2>SETUP</h2><label>Repository<select id="repository"></select></label><button id="refresh" type="button">refresh</button><label>Repository path<input id="repoPath"></label><label>Base branch<select id="base"></select></label><label>PR target<select id="target"></select></label><label>Task<textarea id="task"></textarea></label><p id="runReason"></p><button id="run">RUN</button><button id="stop" hidden>STOP</button></section><section class="run"><h2>RUN</h2><div id="currentStep" class="current-step" hidden></div><table><thead><tr><th>#</th><th>STEP</th><th>STATUS</th><th>OUTPUT</th><th>TIME</th></tr></thead><tbody id="timeline"></tbody></table><div id="system"></div></section><section><h2>VIEWER</h2><div id="viewerTitle">No output selected</div><button id="copyText" hidden>/copy text/</button><pre id="viewer"></pre></section></main><script src="/app.js"></script></body></html>
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>CatOS AutoCodex</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header class="topbar">│ CatOS AutoCodex │ <span id="runNo">RUN #-</span> │ <span id="status">idle</span> │ <span id="elapsed">00:00</span> │</header>
+  <main class="commander-grid">
+    <section class="panel setup-panel">
+      <h2>┌─ SETUP ─────────────────────┐</h2>
+      <label><span>Repository</span><select id="repository"></select></label>
+      <label><span>Base branch</span><select id="base"></select></label>
+      <label><span>PR target</span><select id="target"></select></label>
+      <label><span>Task</span><textarea id="task"></textarea></label>
+      <p id="runReason" class="message"></p>
+      <button id="run">RUN</button>
+    </section>
+    <section class="panel run-panel">
+      <h2>┌─ RUN ─────────────────────────────────────────────────────────┐</h2>
+      <div id="currentStep" class="current-step" hidden></div>
+      <table>
+        <thead><tr><th>#</th><th>STEP</th><th>STATUS</th><th>OUTPUT</th><th>TIME</th></tr></thead>
+        <tbody id="timeline"></tbody>
+      </table>
+      <div id="system"></div>
+      <button id="stop" hidden>STOP</button>
+    </section>
+    <section class="panel output-panel">
+      <h2>┌─ OUTPUT ───────────────────────────────────────┐</h2>
+      <div class="viewer-actions"><div id="viewerTitle">No output selected</div><button id="copy">copy</button></div>
+      <pre id="viewer" readonly></pre>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

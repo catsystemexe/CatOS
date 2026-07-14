@@ -11,7 +11,8 @@ async function exists(file: string): Promise<boolean> { try { await stat(file); 
 async function readJson<T>(file: string): Promise<T | undefined> { try { return JSON.parse(await readFile(file, "utf8")) as T; } catch { return undefined; } }
 function dur(start?: string, end?: string): number | undefined { if (!start) return undefined; const e = end ? Date.parse(end) : Date.now(); const s = Date.parse(start); return Number.isFinite(e) && Number.isFinite(s) ? Math.max(0, Math.round((e - s) / 1000)) : undefined; }
 async function findFiles(dir: string, name: string): Promise<string[]> { const out: string[] = []; async function walk(d: string): Promise<void> { let entries; try { entries = await readdir(d, { withFileTypes: true }); } catch { return; } for (const e of entries) { const p = path.join(d, e.name); if (e.isDirectory()) await walk(p); else if (e.name === name) out.push(p); } } await walk(dir); return out; }
-function rel(runDir: string, file: string | undefined): { label: string; path: string } | undefined { if (!file) return undefined; const r = path.relative(runDir, path.isAbsolute(file) ? file : path.join(runDir, file)); return { label: path.basename(r), path: r }; }
+function rel(runDir: string, file: string | undefined): { label: string; path: string } | undefined { if (!file) return undefined; const abs = path.isAbsolute(file) ? file : path.join(runDir, file); return { label: path.basename(abs), path: path.relative(runDir, abs) }; }
+async function firstExisting(runDir: string, dir: string, candidates: Array<string | undefined>): Promise<string | undefined> { for (const c of candidates) { if (!c) continue; const abs = path.isAbsolute(c) ? c : path.join(runDir, c); if (await exists(abs)) return path.relative(runDir, abs); } for (const c of candidates) { if (!c) continue; const abs = path.join(dir, c); if (await exists(abs)) return path.relative(runDir, abs); } return undefined; }
 
 export async function buildUiTimeline(runDir: string): Promise<UiTimelineRow[]> {
   const rows: UiTimelineRow[] = [];
@@ -23,19 +24,17 @@ export async function buildUiTimeline(runDir: string): Promise<UiTimelineRow[]> 
   for (const { file, attempt } of parsed) {
     const dir = path.dirname(file);
     const isRework = attempt.order > 1 || path.relative(runDir, dir).startsWith("attempts");
-    const stepRoot = dir.split(`${path.sep}attempts${path.sep}`)[0];
-    const handoff = (await exists(path.join(stepRoot, "gpt-handoff.md"))) ? path.relative(runDir, path.join(stepRoot, "gpt-handoff.md")) : undefined;
-    const coding = handoff ?? attempt.artifacts.codingResultPath ?? (await exists(path.join(dir, "coding-result.json")) ? path.relative(runDir, path.join(dir, "coding-result.json")) : undefined);
+    const coding = await firstExisting(runDir, dir, [attempt.artifacts.codingResultPath, "coding-result.json"]);
     rows.push({ order: rows.length + 1, type: "codex", label: isRework ? `CODEX (REWORK #${Math.max(1, attempt.order - 1)})` : "CODEX", status: attempt.status === "running" ? "running" : attempt.status === "cancelled" ? "cancelled" : attempt.status === "failed" ? "failed" : "completed", output: rel(runDir, coding), durationSeconds: dur(attempt.startedAt, attempt.completedAt) });
-    const validation = attempt.artifacts.validationReportPath ?? (await exists(path.join(dir, "validation-report.json")) ? path.relative(runDir, path.join(dir, "validation-report.json")) : undefined);
+    const validation = await firstExisting(runDir, dir, [attempt.artifacts.validationReportPath, "validation-report.json"]);
     if (validation) {
       const vr = await readJson<{ status?: string }>(path.join(runDir, validation));
-      rows.push({ order: rows.length + 1, type: "validation", label: "VALIDATION", status: vr?.status === "PASS" ? "completed" : "failed", output: rel(runDir, handoff ?? validation) });
+      rows.push({ order: rows.length + 1, type: "validation", label: "VALIDATION", status: vr?.status === "PASS" ? "completed" : "failed", output: rel(runDir, validation) });
     }
-    const review = attempt.artifacts.reviewReportPath ?? (await exists(path.join(dir, "review-report.json")) ? path.relative(runDir, path.join(dir, "review-report.json")) : undefined);
+    const review = await firstExisting(runDir, dir, [attempt.artifacts.reviewReportPath, "review-report.json", "review-package.md"]);
     if (review) {
-      const rr = await readJson<{ verdict?: string }>(path.join(runDir, review));
-      rows.push({ order: rows.length + 1, type: "review", label: "REVIEW", status: rr?.verdict === "ACCEPT" ? "completed" : rr?.verdict === "REWORK" ? "rework" : rr?.verdict === "HUMAN_REQUIRED" ? "rework" : "failed", output: rel(runDir, handoff ?? review) });
+      const rr = review.endsWith(".json") ? await readJson<{ verdict?: string }>(path.join(runDir, review)) : undefined;
+      rows.push({ order: rows.length + 1, type: "review", label: "REVIEW", status: rr?.verdict === "ACCEPT" ? "completed" : rr?.verdict === "REWORK" ? "rework" : rr?.verdict === "HUMAN_REQUIRED" ? "rework" : rr ? "failed" : "completed", output: rel(runDir, review) });
     }
   }
   return rows.map((r, i) => ({ ...r, order: i + 1 }));
