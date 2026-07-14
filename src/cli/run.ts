@@ -1,5 +1,8 @@
 import { analyzeTaskBrief, writeTaskBrief, type TaskAnalystProvider } from "../agents/taskAnalyst.js";
 import { loadProjectConfig } from "../config/loadConfig.js";
+import { resolveRepositoryRunConfig } from "../repositoryRunConfig.js";
+import { validateManualRepository } from "../repositoryDiscovery.js";
+import { writeFile } from "node:fs/promises";
 import { createRun } from "../runs/createRun.js";
 import { CodexSdkWorker, writeCodingArtifacts, type CodingWorker, normalizeWorkBranchName, buildIsolatedWorkspacePath } from "../codingWorker.js";
 import { ShellValidationRunner, buildValidationCommands, writeValidationReport, type ValidationRunner } from "../validationRunner.js";
@@ -27,35 +30,49 @@ function readOption(args: string[], name: string): string | undefined {
 }
 
 export async function runCommand(args: string[], options: RunCliOptions = {}): Promise<void> {
-  const projectId = readOption(args, "--project");
+  let projectId = readOption(args, "--project");
+  const repositoryPath = readOption(args, "--repo") ?? readOption(args, "--repository");
   const goal = readOption(args, "--task");
 
-  if (!projectId) {
-    throw new Error("Chybí povinný parametr --project.");
+  if (!projectId && !repositoryPath) {
+    throw new Error("Chybí povinný parametr --project nebo --repo.");
   }
 
   if (!goal) {
     throw new Error("Chybí povinný parametr --task.");
   }
 
-  const configPath = `projects/${projectId}.yaml`;
-  const loaded = await loadProjectConfig(configPath, options.cwd);
-
-  if (loaded.config.project.id !== projectId) {
-    throw new Error(`ID projektu v konfiguraci (${loaded.config.project.id}) neodpovídá parametru --project (${projectId}).`);
+  let loaded: Awaited<ReturnType<typeof loadProjectConfig>>;
+  let configSource: string = "project-config";
+  let configPath: string;
+  if (repositoryPath) {
+    const repo = (await validateManualRepository(repositoryPath)).path;
+    const resolved = await resolveRepositoryRunConfig(repo, options.cwd);
+    loaded = { config: resolved.config, configPath: resolved.configPath, absoluteConfigPath: resolved.configPath, absoluteRepoPath: repo };
+    configSource = resolved.configSource;
+    projectId = projectId ?? loaded.config.project.id;
+    configPath = resolved.configPath;
+  } else {
+    configPath = `projects/${projectId}.yaml`;
+    loaded = await loadProjectConfig(configPath, options.cwd);
+    if (loaded.config.project.id !== projectId) {
+      throw new Error(`ID projektu v konfiguraci (${loaded.config.project.id}) neodpovídá parametru --project (${projectId}).`);
+    }
   }
 
   const baseBranch = readOption(args, "--base-branch") ?? loaded.config.project.baseBranch;
   if (!baseBranch) throw new Error("Missing base branch: pass --base-branch or set project.baseBranch in config.");
   const prTargetBranch = readOption(args, "--pr-target") ?? loaded.config.git.prTargetBranch ?? baseBranch;
   const workspaceRoot = resolveWorkspaceRoot(loaded.config.execution.workspaceRoot);
-  const run = await createRun(projectId, goal, configPath, { runsDir: options.runsDir });
+  const run = await createRun(projectId!, goal, configPath, { runsDir: options.runsDir });
+  await writeFile(run.inputPath, `${JSON.stringify({ ...run.input, repositoryPath: loaded.absoluteRepoPath, baseBranch, prTargetBranch, configSource }, null, 2)}\n`, "utf8");
+  (run.input as any).repositoryPath = loaded.absoluteRepoPath;
   const runBranch = normalizeWorkBranchName(run.runId);
   const workspacePath = await buildIsolatedWorkspacePath({ workspaceRoot, runId: run.runId, repositoryPath: loaded.absoluteRepoPath });
-  const git = await resolveGitContext({ projectId, repositoryPath: loaded.absoluteRepoPath, baseBranch, prTargetBranch, runBranch, workspacePath, remoteName: loaded.config.git.remoteName });
+  const git = await resolveGitContext({ projectId: projectId!, repositoryPath: loaded.absoluteRepoPath, baseBranch, prTargetBranch, runBranch, workspacePath, remoteName: loaded.config.git.remoteName });
   const sessionState = await createSession({ runDir: run.runDir, runId: run.runId, goal, branch: runBranch, workspacePath, git, requestTitle: "Initial run", request: goal });
   await appendTimelineEvent(run.runDir, { type: "git.base_resolved", sessionId: run.runId, metadata: { baseBranch, baseCommit: git.baseCommit, runBranch, prTargetBranch } });
-  const analysis = await analyzeTaskBrief(goal, projectId, { provider: options.taskAnalystProvider });
+  const analysis = await analyzeTaskBrief(goal, projectId!, { provider: options.taskAnalystProvider });
   const taskBriefPath = await writeTaskBrief(run.runDir, analysis.taskBrief);
   const codingWorker = options.codingWorker ?? new CodexSdkWorker();
   const validationRunner = options.validationRunner ?? new ShellValidationRunner();
@@ -265,6 +282,7 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
   console.log("CatOS run created");
   console.log(`Run ID: ${run.runId}`);
   console.log(`Project: ${loaded.config.project.id} (${loaded.config.project.name})`);
+  console.log(`Config source: ${configSource}`);
   console.log(`Repository: ${loaded.absoluteRepoPath}`);
   console.log(`Input: ${run.inputPath}`);
   console.log(`Task brief: ${taskBriefPath}`);
