@@ -123,10 +123,10 @@ test("layout keeps actions visible, wraps long values, and prevents page scrolli
   expect(css).toContain("body{display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden");
   expect(css).toContain("main{min-height:0;overflow:hidden}");
   expect(css).toContain(".app-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)");
-  expect(css).toContain(".setup-panel{border:1px solid #000;padding:8px;display:grid;grid-template-rows:auto auto auto auto minmax(90px,1fr) auto auto");
-  expect(css).toContain(".execution-panel{display:grid;grid-template-rows:minmax(0,3fr) minmax(0,2fr)");
+  expect(css).toContain(".setup-panel{border:1px solid #000;padding:6px;display:grid;grid-template-rows:auto auto auto auto minmax(90px,1fr) auto auto");
+  expect(css).toContain(".execution-panel{display:grid;grid-template-rows:minmax(0,1fr) auto");
   expect(css).toContain(".value-readout{display:block;white-space:normal;overflow-wrap:anywhere;word-break:break-word");
-  expect(css).toContain("#viewer{display:none}");
+  expect(css).not.toContain("#viewer{");
   expect(css).not.toContain("text-overflow:ellipsis");
   expect(css).not.toContain("text-overflow: ellipsis");
 });
@@ -134,7 +134,7 @@ test("layout keeps actions visible, wraps long values, and prevents page scrolli
 test("CLONE uses a compact primary button, not full-width input styling", async () => {
   const { css, html } = await uiFiles();
   expect(html).toContain('id="clone" class="primary"');
-  expect(css).toContain("button.primary{width:auto;padding:6px 16px;border:2px solid #000;background:#000;color:#fff;font-weight:bold}");
+  expect(css).toContain("button.primary{width:auto;padding:4px 12px;border:2px solid #000;background:#000;color:#fff;font-weight:bold}");
 });
 
 test("RUN state model starts first and only shows running after a valid runId", async () => {
@@ -171,11 +171,21 @@ test("RUN and OUTPUT UI hide raw JSON in collapsed details and use generated fil
   const { app, html, css } = await uiFiles();
   expect(html).toContain('id="technicalDetails"');
   expect(html).toContain('id="errorPanel"');
-  expect(html).toContain('id="outputList"');
+  expect(html).toContain('id="outputList" class="output-select" hidden');
   expect(app).toContain("latestSystem?.outputs?.length?latestSystem.outputs");
   expect(app).toContain("No readable output file was produced.");
   expect(app).toContain("$('copy').disabled=!res.content");
+  expect(app).toContain("async function copyText(text)");
+  expect(app).toContain("document.execCommand('copy')");
+  expect(app).toContain("rowStep(r){return r.name||r.label||r.type||'Unnamed step';}");
   expect(app).not.toContain("rowStep(r){return r.step||r.name||r.path||r.summary||'step';}");
-  expect(css).toContain(".run-panel{overflow:auto}");
-  expect(css).toContain("#errorDetails,#system{max-height:180px;overflow:auto");
+  expect(html).not.toContain("run-summary");
+  expect(html).not.toContain("<table>");
+  expect(html).toContain('<div id="timeline" class="timeline-list"');
+  expect(html).toContain('<details id="technicalDetails"><summary>Technical details</summary>');
+  expect((html.match(/Technical details/g)||[]).length).toBe(1);
+  expect(css).toContain(".timeline-row{display:grid;grid-template-columns:3ch minmax(8ch,1fr) 10ch 8ch");
+  expect(css).toContain(".timeline-message{grid-column:2 / -1");
+  expect(css).toContain(".run-panel{overflow:hidden}");
+  expect(css).toContain("#errorDetails,#system{max-height:160px;overflow:auto");
 });
