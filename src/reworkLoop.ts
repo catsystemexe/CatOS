@@ -6,6 +6,7 @@ import type { TaskBrief } from "./schemas/taskBrief.js";
 import type { CodingResult } from "./codingWorker.js";
 import type { ReviewReport } from "./schemas/reviewReport.js";
 import type { ValidationReport } from "./validationRunner.js";
+import { ensureStepResultArtifacts, writeSessionReport } from "./finalExport.js";
 
 export function buildReworkPackage(input: {
   attempt: number;
@@ -61,8 +62,18 @@ export async function writeReworkPackage(attemptDir: string, reworkPackage: Rewo
 }
 
 export async function writeFinalResult(runDir: string, finalResult: FinalResult): Promise<string> {
-  const parsed = finalResultSchema.parse(finalResult);
   const filePath = path.join(runDir, "final-result.json");
+  const stepArtifacts = await ensureStepResultArtifacts(runDir);
+  const draft = finalResultSchema.parse({ ...finalResult, runArtifacts: [...(finalResult.runArtifacts ?? []), ...stepArtifacts] });
+  await writeFile(filePath, `${JSON.stringify(draft, null, 2)}\n`, "utf8");
+  await writeSessionReport(runDir);
+  const parsed = finalResultSchema.parse({
+    ...draft,
+    runArtifacts: [
+      ...(draft.runArtifacts ?? stepArtifacts),
+      { label: "AutoCodex session report", path: "AUTOCODEX_SESSION_REPORT.md", kind: "session-report", readable: true },
+    ],
+  });
   await writeFile(filePath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
   return filePath;
 }
