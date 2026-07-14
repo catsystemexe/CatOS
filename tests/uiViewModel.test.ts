@@ -15,10 +15,13 @@ test("UI script and markup render GitHub-first checkout controls", async () => {
   const html = await readFile(new URL("../src/ui/index.html", import.meta.url), "utf8");
   expect(html).toContain("No output selected");
   expect(html).toContain("Repository");
-  expect(html).toContain("Repository path");
+  expect(html).toContain("Local clone");
   expect(html).toContain("<input id=\"repositoryPath\" readonly>");
   expect(html).toContain("id=\"branch\"");
-  expect(html).toContain("id=\"refresh\"");
+  expect(html).toContain("Base branch");
+  expect(html).toContain("<input id=\"baseBranch\" readonly>");
+  expect(html).toContain("id=\"clone\"");
+  expect(html).not.toContain("id=\"refresh\"");
   expect(html).toContain("id=\"copy\"");
   expect(html).toContain("type=\"module\" src=\"/app.js\"");
   expect(html).not.toContain("copyText");
@@ -26,6 +29,7 @@ test("UI script and markup render GitHub-first checkout controls", async () => {
   expect(html).not.toContain("Project");
   expect(html).not.toContain("Profile");
   expect(html).not.toContain("Sandbox");
+  expect(html).not.toContain("PR target");
 });
 
 test("repository options use only GitHub repositories and full names", async () => {
@@ -90,10 +94,25 @@ test("frontend clone flow stores checkout response without repository refresh", 
 
 test("frontend clone flow stores checkout response and uses it for RUN", async () => {
   const app = await readFile(new URL("../src/ui/app.js", import.meta.url), "utf8");
-  expect(app).toContain("const ready=!!checkout&&!!$('branch').value&&!!$('task').value.trim()");
+  expect(app).toContain("const ready=!!checkout&&!!checkout.localPath&&!!checkout.branch&&!!$('task').value.trim()");
   expect(app).toContain("$('run').disabled=!ready");
   expect(app).toContain("if(!checkout)throw new Error('RUN requires a cloned branch checkout.')");
   expect(app).toContain("repositoryPath:checkout.localPath");
   expect(app).toContain("baseBranch:checkout.branch");
   expect(app).toContain("prTargetBranch:checkout.branch");
+});
+
+
+test("MVP checkout UI keeps branch visible, resets checkout on selection changes, and avoids ellipsis path truncation", async () => {
+  const app = await readFile(new URL("../src/ui/app.js", import.meta.url), "utf8");
+  const css = await readFile(new URL("../src/ui/app.css", import.meta.url), "utf8");
+  expect(app).toContain("$('branchStatus').textContent='Loading branches...'");
+  expect(app).toContain("$('branch').innerHTML='<option value=\"\">No branches available</option>'");
+  expect(app).toContain("function clearCheckout(){checkout=null; $('repositoryPath').value='not cloned'; $('baseBranch').value='-';}");
+  expect(app).toContain("$('repository').onchange=async()=>{clearCheckout(); await loadBranches(selectedRepository());}");
+  expect(app).toContain("$('branch').onchange=()=>{clearCheckout(); updateRepositoryState();}");
+  expect(css).toContain("#repositoryPath,#baseBranch");
+  expect(css).toContain("overflow-x:auto");
+  expect(css).not.toContain("text-overflow:ellipsis");
+  expect(css).not.toContain("overflow:hidden;text-overflow:ellipsis");
 });

@@ -10,14 +10,21 @@
   <main class="commander-grid">
     <section class="panel setup-panel">
       <h2>┌─ SETUP ─────────────────────┐</h2>
-      <label><span>Repository</span><select id="repository"></select></label>
-      <button id="refresh" type="button">refresh</button>
-      <button id="clone" type="button" hidden>CLONE BRANCH</button>
-      <label><span>Repository path</span><input id="repositoryPath" readonly></label>
-      <label><span>Branch</span><select id="branch"></select></label>
+      <div class="repository-controls">
+        <label><span>Git repository</span><select id="repository"></select></label>
+        <label><span>Branch</span><select id="branch"></select></label>
+      </div>
+      <p id="branchStatus" class="message branch-message"></p>
+      <button id="clone" type="button">CLONE</button>
+      <label><span>Local clone</span><input id="repositoryPath" readonly></label>
+      <label><span>Base branch</span><input id="baseBranch" readonly></label>
+      <p class="hint">Snapshot: Run snapshot will be created automatically.</p>
       <label><span>Task</span><textarea id="task"></textarea></label>
       <p id="runReason" class="message"></p>
-      <button id="run">RUN</button>
+      <div class="run-actions">
+        <button id="run" type="button">RUN</button>
+        <button id="stop" type="button" disabled>STOP</button>
+      </div>
     </section>
     <section class="panel run-panel">
       <h2>┌─ RUN ─────────────────────────────────────────────────────────┐</h2>
@@ -27,11 +34,10 @@
         <tbody id="timeline"></tbody>
       </table>
       <div id="system"></div>
-      <button id="stop" hidden>STOP</button>
     </section>
     <section class="panel output-panel">
       <h2>┌─ OUTPUT ───────────────────────────────────────┐</h2>
-      <div class="viewer-actions"><div id="viewerTitle">No output selected</div><button id="copy">copy</button></div>
+      <div class="viewer-actions"><div id="viewerTitle">No output selected</div><button id="copy" type="button">copy</button></div>
       <pre id="viewer" readonly></pre>
     </section>
   </main>
