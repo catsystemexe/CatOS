@@ -36,21 +36,13 @@ button.primary:disabled{background:#fff;color:#555;border-color:#000}
 .timeline-wrap{min-height:0;overflow:auto;border-top:1px solid #ddd}
 .timeline-list{display:grid;min-width:0}
 .timeline-empty{padding:6px 2px;color:#444}
-.timeline-row{display:grid;grid-template-columns:3ch minmax(8ch,1fr) 10ch 8ch;column-gap:8px;align-items:start;padding:5px 2px;border-bottom:1px solid #ddd;cursor:pointer;min-height:28px}
-.timeline-row.selected{font-weight:bold}
+.timeline-row{display:grid;grid-template-columns:24px minmax(100px,1fr) 100px 64px 56px;column-gap:8px;align-items:center;padding:3px 2px;border-bottom:1px solid #ddd;min-height:24px;font-size:12px}
 .timeline-index,.timeline-status,.timeline-time{color:#333;white-space:nowrap}
-.timeline-step,.timeline-message{overflow-wrap:anywhere;word-break:break-word;min-width:0}
-.timeline-message{grid-column:2 / -1;margin-top:2px;color:#333;font-weight:400}
-#technicalDetails{min-height:0;overflow:hidden;border-top:1px solid #ddd;padding-top:4px}
-#technicalDetails>summary{cursor:pointer;font-size:12px}
-#technicalDetails[open]{overflow:auto;max-height:38%}
-.error-panel{border:1px solid #000;padding:5px;margin-top:5px;overflow:auto}
-#errorDetails,#system{max-height:160px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;margin:4px 0 0;border:1px solid #000;padding:5px;font-size:12px}
-.output-select{height:26px}
+.timeline-step{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.step-copy{height:20px;padding:1px 5px;font-size:11px}
 .output-file-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;align-items:center}
 #viewerTitle{min-width:0;white-space:normal;overflow-wrap:anywhere;word-break:break-word}
 .output-actions{display:flex;gap:4px;align-items:center}
 .output-actions button{height:24px;padding:2px 7px;font-size:12px}
-.output-path{font-size:12px;color:#333}
 .completed,.failed,.rework,.running,.human_required,.cancelled,.pending,.final,.add,.del,.stopped{color:#000}
 @media (max-width:800px){.app-layout{grid-template-columns:minmax(0,1fr)}.branch-row{grid-template-columns:minmax(0,1fr)}.execution-panel{grid-template-rows:minmax(0,1fr) auto}}
