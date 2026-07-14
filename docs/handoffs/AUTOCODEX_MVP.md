@@ -16,6 +16,15 @@ repositoryRoots:
 
 If this file is absent, CatOS scans only `process.cwd()`. CatOS never scans the whole filesystem. Discovery walks the configured roots to a bounded depth of three levels, canonicalizes paths via `realpath`, verifies candidates with `git rev-parse --is-inside-work-tree`, supports both `.git` directories and `.git` files for worktrees, and deduplicates symlinked repositories by canonical top-level path. It ignores `node_modules`, `.git`, `runs`, `build`, `dist`, `coverage`, CatOS runtime/workspace directories, and continues when one directory cannot be read.
 
+
+## GitHub repository discovery and clone
+
+The Console can augment local repository discovery with GitHub repositories available to the authenticated Replit user. In Replit, configure a Secret named `GITHUB_TOKEN` with read-only repository access for the repositories that should appear in the selector. `GH_TOKEN` is accepted as a fallback alias, but `GITHUB_TOKEN` takes precedence. The token is read from the environment at runtime, is not written to source, config, remotes, logs, run artifacts, or UI state, and no token input is exposed in the UI.
+
+GitHub discovery uses the GitHub REST API directly with built-in `fetch`; the `gh` CLI is not required. If no token is available, CatOS does not attempt anonymous public repository discovery and the UI shows only the short message `GitHub repositories unavailable.` while local discovery continues to work.
+
+Remote GitHub repositories are cloned only after the user presses `clone`, into the managed persistent root `/home/runner/catos-repositories/<owner>/<repo>` using sanitized owner/repo path segments. Private HTTPS clones use a temporary `GIT_ASKPASS` helper and `GIT_TERMINAL_PROMPT=0`; clone URLs and stored `origin` remotes remain clean `https://github.com/owner/repo.git` URLs without embedded credentials.
+
 ## Manual repository path
 
 The UI also accepts a manually entered Repository path. Manual paths may be outside configured roots because the user explicitly supplied them. CatOS canonicalizes the path, verifies that it exists, verifies it is a Git worktree, adds it to the in-memory selector list, and loads local branches. It is not persisted by the MVP.
@@ -59,8 +68,8 @@ Select repository → select base branch → PR target defaults to base → ente
 
 ## Security boundaries
 
-No whole-filesystem scans, no GitHub API, no remote branch fetching, no cloning, no automatic repository creation, no push, no remote PR, no merge, no auth flow, and no environment dump. Viewer paths remain restricted to the run root.
+No whole-filesystem scans, no token persistence, no token-bearing remote URLs, no automatic push, no remote PR, no merge, no interactive auth flow, and no environment dump. Viewer paths remain restricted to the run root.
 
 ## Known limitations
 
-The MVP has no complex filesystem browser, no multi-user dashboard, no IDE/editor, no GitHub discovery, and no parallel run dashboard. Manual repository paths are in-memory only. STOP remains best-effort for UI-started child processes.
+The MVP has no complex filesystem browser, no multi-user dashboard, no IDE/editor, no anonymous GitHub discovery without credentials, and no parallel run dashboard. Manual repository paths are in-memory only. STOP remains best-effort for UI-started child processes.
