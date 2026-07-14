@@ -8,38 +8,44 @@
 <body>
   <header class="topbar">CatOS AutoCodex | <span id="runNo">RUN #-</span> | <span id="status">idle</span> | <span id="elapsed">00:00</span></header>
   <main class="app-layout">
-    <section class="setup-window">
+    <section class="setup-panel">
       <h2>SETUP</h2>
-      <div class="repository-controls">
-        <label><span>Git repository</span><select id="repository"></select></label>
-        <label><span>Branch</span><select id="branch"></select></label>
+      <div class="repository-block">
+        <label for="repository">Git repository</label>
+        <select id="repository"></select>
+        <code id="selectedRepositoryName" class="value-readout">No repository selected</code>
       </div>
-      <p id="branchStatus" class="message branch-message"></p>
-      <button id="clone" type="button">CLONE</button>
-      <label><span>Local clone</span><input id="repositoryPath" readonly></label>
-      <label><span>Base branch</span><input id="baseBranch" readonly></label>
-      <p class="hint">Snapshot: created automatically for each RUN.</p>
-      <label class="task-field"><span>Task</span><textarea id="task"></textarea></label>
-      <p id="runReason" class="message"></p>
+      <div class="branch-row">
+        <label class="branch-field" for="branch"><span>Branch</span><select id="branch"></select></label>
+        <button id="clone" class="primary" type="button">CLONE BRANCH</button>
+      </div>
+      <div class="checkout-summary">
+        <p id="branchStatus" class="message branch-message"></p>
+        <div><strong>Local clone:</strong> <div id="repositoryPath" class="value-readout" tabindex="0">not cloned</div></div>
+        <div><strong>Base branch:</strong> <span id="baseBranch" class="value-readout inline-readout">-</span></div>
+        <div><strong>Snapshot:</strong> automatic on RUN</div>
+      </div>
+      <label class="task-field" for="task"><span>Task</span><textarea id="task"></textarea></label>
+      <p id="runReason" class="message" role="status" aria-live="polite"></p>
       <div class="run-actions">
-        <button id="run" type="button">RUN</button>
+        <button id="run" class="primary" type="button">RUN</button>
         <button id="stop" type="button" disabled>STOP</button>
       </div>
     </section>
-    <section class="execution-window">
-      <section class="run-window">
+    <section class="execution-panel">
+      <section class="run-panel">
         <h2>RUN</h2>
-        <div id="currentStep" class="current-step" hidden></div>
+        <div id="currentStep" class="current-step">No run started.</div>
         <table>
-          <thead><tr><th>#</th><th>STEP</th><th>STATUS</th><th>OUTPUT</th><th>TIME</th></tr></thead>
+          <thead><tr><th>#</th><th>STEP</th><th>STATUS</th><th>TIME</th></tr></thead>
           <tbody id="timeline"></tbody>
         </table>
         <div id="system"></div>
       </section>
-      <section class="output-window">
+      <section class="output-panel">
         <h2>OUTPUT</h2>
-        <div class="viewer-actions"><div id="viewerTitle">No output selected</div><button id="copy" type="button">COPY</button></div>
-        <pre id="viewer" readonly></pre>
+        <div class="viewer-actions"><div id="viewerTitle">No output available yet.</div><button id="copy" type="button">COPY</button></div>
+        <pre id="viewer"></pre>
       </section>
     </section>
   </main>

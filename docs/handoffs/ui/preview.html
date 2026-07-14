@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoCodex UI Static Preview</title>
+  <style>
+*{box-sizing:border-box}
+html,body{width:100%;height:100%;margin:0}
+body{display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden;background:#fff;color:#000;font:14px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace}
+.preview-switcher{border-bottom:1px solid #000;padding:6px 8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#fff}
+.preview-switcher strong{margin-right:8px}.preview-switcher button{width:auto;min-width:0;border:1px solid #000;background:#fff;color:#000;font:inherit;padding:4px 8px;height:30px;text-align:center;cursor:pointer;border-radius:0;box-shadow:none}.preview-switcher button[aria-pressed="true"]{border:2px solid #000;background:#000;color:#fff;font-weight:bold}.preview-state{display:none;min-height:0;height:100%;grid-template-rows:auto minmax(0,1fr)}.preview-state.active{display:grid}
+header{border-bottom:1px solid #000;padding:6px 8px;white-space:nowrap;overflow:hidden;text-overflow:clip}
+main{min-height:0;overflow:hidden}
+.app-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;padding:8px;height:100%;min-height:0;overflow:hidden}
+.setup-panel,.execution-panel,.run-panel,.output-panel{min-width:0;min-height:0;background:#fff;color:#000}
+.setup-panel{border:1px solid #000;padding:8px;display:grid;grid-template-rows:auto auto auto auto minmax(90px,1fr) auto auto;gap:8px;min-height:0;overflow:hidden}
+.execution-panel{display:grid;grid-template-rows:minmax(0,3fr) minmax(0,2fr);gap:8px;min-height:0;overflow:hidden}
+.run-panel,.output-panel{border:1px solid #000;overflow:hidden;padding:8px;display:flex;flex-direction:column;gap:8px}
+h2{margin:0;font-size:14px;font-weight:700}
+label{display:block;min-width:0}label span{display:block;margin-bottom:4px}
+.repository-block{display:grid;grid-template-rows:auto auto auto;gap:4px;min-width:0}.branch-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end;min-width:0}.checkout-summary{display:grid;gap:4px;min-width:0;overflow:hidden}
+select,textarea,button{width:100%;min-width:0;border:1px solid #000;background:#fff;color:#000;font:inherit;padding:4px}select{height:30px;text-overflow:clip}button{height:30px;text-align:center;cursor:pointer;border-radius:0;box-shadow:none}button:disabled{cursor:not-allowed;color:#555;background:#fff}button.primary{width:auto;padding:6px 16px;border:2px solid #000;background:#000;color:#fff;font-weight:bold}button.primary:disabled{background:#fff;color:#555;border-color:#000}.message{min-height:1.35em;margin:0}.branch-message{color:#000}.value-readout{display:block;white-space:normal;overflow-wrap:anywhere;word-break:break-word;min-width:0;max-width:100%}.inline-readout{display:inline;vertical-align:baseline}.task-field{min-height:0;display:flex;flex-direction:column;overflow:hidden}.task-field textarea{flex:1 1 auto;min-height:0;resize:none;overflow:auto}.run-actions{display:grid;grid-template-columns:auto auto;justify-content:stretch;gap:8px}.run-actions button{width:100%}#stop,.stop-button{border:2px solid #000;background:#fff;color:#000;font-weight:bold}.stop-button:disabled{color:#555}.current-step{white-space:normal;overflow-wrap:anywhere;margin:0;min-height:1.35em}table{width:100%;border-collapse:collapse;table-layout:fixed;min-height:0}th,td{border:1px solid #000;padding:2px 4px;text-align:left;vertical-align:top;white-space:normal;overflow-wrap:anywhere;word-break:break-word}th{font-weight:700}th:nth-child(1),td:nth-child(1){width:4ch}th:nth-child(2),td:nth-child(2){width:auto}th:nth-child(3),td:nth-child(3){width:12ch}th:nth-child(4),td:nth-child(4){width:9ch}#system{min-height:0;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}.viewer-actions{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}.viewer-title{min-width:0;white-space:normal;overflow-wrap:anywhere;word-break:break-word}.viewer{flex:1 1 auto;min-height:0;margin:0;overflow:auto;white-space:pre-wrap;border:1px solid #000;background:#fff;color:#000;padding:8px}.completed,.failed,.rework,.running,.human_required,.cancelled,.pending,.final,.add,.del,.stopped{color:#000}
+@media (max-width:800px){.app-layout{grid-template-columns:minmax(0,1fr)}.branch-row{grid-template-columns:minmax(0,1fr)}}
+  </style>
+</head>
+<body>
+  <nav class="preview-switcher" aria-label="Preview state switcher">
+    <strong>AutoCodex UI preview</strong>
+    <button type="button" data-state="before" aria-pressed="true">before clone</button>
+    <button type="button" data-state="after" aria-pressed="false">after clone</button>
+    <button type="button" data-state="empty" aria-pressed="false">running empty timeline</button>
+    <button type="button" data-state="output" aria-pressed="false">running with output</button>
+  </nav>
+
+  <section id="state-before" class="preview-state active" aria-label="before clone state">
+    <header class="topbar">CatOS AutoCodex | <span>RUN #-</span> | <span>idle</span> | <span>00:00</span></header>
+    <main class="app-layout">
+      <section class="setup-panel">
+        <h2>SETUP</h2>
+        <div class="repository-block"><label>Git repository</label><select><option>catsystemexe/PRAVNI_STRAZCE_lite</option></select><code class="value-readout">catsystemexe/PRAVNI_STRAZCE_lite</code></div>
+        <div class="branch-row"><label class="branch-field"><span>Branch</span><select><option>lukas</option></select></label><button class="primary" type="button">CLONE BRANCH</button></div>
+        <div class="checkout-summary"><p class="message branch-message"></p><div><strong>Local clone:</strong> <div class="value-readout" tabindex="0">not cloned</div></div><div><strong>Base branch:</strong> <span class="value-readout inline-readout">-</span></div><div><strong>Snapshot:</strong> automatic on RUN</div></div>
+        <label class="task-field"><span>Task</span><textarea>review repo in 5 sentences.
+Write audit in file: test_audit.md</textarea></label><p class="message" role="status">Clone a branch before running.</p><div class="run-actions"><button class="primary" type="button" disabled>RUN</button><button class="stop-button" type="button" disabled>STOP</button></div>
+      </section>
+      <section class="execution-panel"><section class="run-panel"><h2>RUN</h2><div class="current-step">No run started.</div><table><thead><tr><th>#</th><th>STEP</th><th>STATUS</th><th>TIME</th></tr></thead><tbody></tbody></table><div></div></section><section class="output-panel"><h2>OUTPUT</h2><div class="viewer-actions"><div class="viewer-title">No output available yet.</div><button type="button">COPY</button></div><pre class="viewer"></pre></section></section>
+    </main>
+  </section>
+
+  <section id="state-after" class="preview-state" aria-label="after clone state">
+    <header class="topbar">CatOS AutoCodex | <span>RUN #-</span> | <span>idle</span> | <span>00:00</span></header>
+    <main class="app-layout">
+      <section class="setup-panel"><h2>SETUP</h2><div class="repository-block"><label>Git repository</label><select><option>catsystemexe/PRAVNI_STRAZCE_lite</option></select><code class="value-readout">catsystemexe/PRAVNI_STRAZCE_lite</code></div><div class="branch-row"><label class="branch-field"><span>Branch</span><select><option>lukas</option></select></label><button class="primary" type="button">CLONE BRANCH</button></div><div class="checkout-summary"><p class="message branch-message"></p><div><strong>Local clone:</strong> <div class="value-readout" tabindex="0">/home/runner/catos-repositories/Cloned/catsystemexe/PRAVNI_STRAZCE_lite/lukas</div></div><div><strong>Base branch:</strong> <span class="value-readout inline-readout">lukas</span></div><div><strong>Snapshot:</strong> automatic on RUN</div></div><label class="task-field"><span>Task</span><textarea>review repo in 5 sentences.
+Write audit in file: test_audit.md</textarea></label><p class="message" role="status">Ready to run.</p><div class="run-actions"><button class="primary" type="button">RUN</button><button class="stop-button" type="button" disabled>STOP</button></div></section>
+      <section class="execution-panel"><section class="run-panel"><h2>RUN</h2><div class="current-step">No run started.</div><table><thead><tr><th>#</th><th>STEP</th><th>STATUS</th><th>TIME</th></tr></thead><tbody></tbody></table><div></div></section><section class="output-panel"><h2>OUTPUT</h2><div class="viewer-actions"><div class="viewer-title">No output available yet.</div><button type="button">COPY</button></div><pre class="viewer"></pre></section></section>
+    </main>
+  </section>
+
+  <section id="state-empty" class="preview-state" aria-label="running empty timeline state">
+    <header class="topbar">CatOS AutoCodex | <span>RUN #2026-07-14T15-15-28-487Z</span> | <span>running</span> | <span>00:18</span></header>
+    <main class="app-layout"><section class="setup-panel"><h2>SETUP</h2><div class="repository-block"><label>Git repository</label><select><option>catsystemexe/PRAVNI_STRAZCE_lite</option></select><code class="value-readout">catsystemexe/PRAVNI_STRAZCE_lite</code></div><div class="branch-row"><label class="branch-field"><span>Branch</span><select><option>lukas</option></select></label><button class="primary" type="button">CLONE BRANCH</button></div><div class="checkout-summary"><p class="message branch-message"></p><div><strong>Local clone:</strong> <div class="value-readout">/home/runner/catos-repositories/Cloned/catsystemexe/PRAVNI_STRAZCE_lite/lukas</div></div><div><strong>Base branch:</strong> <span class="value-readout inline-readout">lukas</span></div><div><strong>Snapshot:</strong> automatic on RUN</div></div><label class="task-field"><span>Task</span><textarea>review repo in 5 sentences.
+Write audit in file: test_audit.md</textarea></label><p class="message" role="status">Creating run snapshot…</p><div class="run-actions"><button class="primary" type="button" disabled>RUN</button><button class="stop-button" type="button">STOP</button></div></section><section class="execution-panel"><section class="run-panel"><h2>RUN</h2><div class="current-step">Waiting for first timeline event…</div><table><thead><tr><th>#</th><th>STEP</th><th>STATUS</th><th>TIME</th></tr></thead><tbody></tbody></table><div></div></section><section class="output-panel"><h2>OUTPUT</h2><div class="viewer-actions"><div class="viewer-title">No output available yet.</div><button type="button">COPY</button></div><pre class="viewer"></pre></section></section></main>
+  </section>
+
+  <section id="state-output" class="preview-state" aria-label="running with timeline and output state">
+    <header class="topbar">CatOS AutoCodex | <span>RUN #2026-07-14T15-15-28-487Z</span> | <span>running</span> | <span>00:18</span></header>
+    <main class="app-layout"><section class="setup-panel"><h2>SETUP</h2><div class="repository-block"><label>Git repository</label><select><option>catsystemexe/PRAVNI_STRAZCE_lite</option></select><code class="value-readout">catsystemexe/PRAVNI_STRAZCE_lite</code></div><div class="branch-row"><label class="branch-field"><span>Branch</span><select><option>lukas</option></select></label><button class="primary" type="button">CLONE BRANCH</button></div><div class="checkout-summary"><p class="message branch-message"></p><div><strong>Local clone:</strong> <div class="value-readout">/home/runner/catos-repositories/Cloned/catsystemexe/PRAVNI_STRAZCE_lite/lukas</div></div><div><strong>Base branch:</strong> <span class="value-readout inline-readout">lukas</span></div><div><strong>Snapshot:</strong> automatic on RUN</div></div><label class="task-field"><span>Task</span><textarea>review repo in 5 sentences.
+Write audit in file: test_audit.md</textarea></label><p class="message" role="status">Running.</p><div class="run-actions"><button class="primary" type="button" disabled>RUN</button><button class="stop-button" type="button">STOP</button></div></section><section class="execution-panel"><section class="run-panel"><h2>RUN</h2><div class="current-step">Running.</div><table><thead><tr><th>#</th><th>STEP</th><th>STATUS</th><th>TIME</th></tr></thead><tbody><tr><td>1</td><td>Snapshot workspace</td><td>PASS</td><td>00:01</td></tr><tr><td>2</td><td>Task analyst</td><td>PASS</td><td>00:03</td></tr><tr><td>3</td><td>Codex worker</td><td>RUNNING</td><td>00:14</td></tr><tr><td>4</td><td>Validation</td><td>WAITING</td><td>-</td></tr><tr><td>5</td><td>Review</td><td>WAITING</td><td>-</td></tr></tbody></table><div></div></section><section class="output-panel"><h2>OUTPUT</h2><div class="viewer-actions"><div class="viewer-title">task-brief.md</div><button type="button">COPY</button></div><pre class="viewer"># Task Brief
+Review the repository in five sentences.
+Write the audit to test_audit.md.</pre></section></section></main>
+  </section>
+
+  <script>
+    const buttons = [...document.querySelectorAll('[data-state]')];
+    const states = [...document.querySelectorAll('.preview-state')];
+    function show(name){
+      buttons.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.state === name)));
+      states.forEach(state => state.classList.toggle('active', state.id === `state-${name}`));
+      location.hash = name;
+    }
+    buttons.forEach(button => button.addEventListener('click', () => show(button.dataset.state)));
+    if (location.hash) show(location.hash.slice(1));
+  </script>
+</body>
+</html>
