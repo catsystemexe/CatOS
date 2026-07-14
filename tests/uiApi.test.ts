@@ -83,3 +83,19 @@ test("API API MVP clone flow returns checkout localPath for run payload", async 
   expect(runPayload.repositoryPath).toBe(expectedTarget);
   expect(runPayload.baseBranch).toBe(selectedBranch);
 });
+
+import { readRunOutput } from "../src/uiApi.js";
+
+test("relative output path resolves against finalWorkspacePath", async () => {
+  const cwd = await root();
+  const runsDir = path.join(cwd, "runs");
+  const runId = "run-output";
+  const runDir = path.join(runsDir, runId);
+  const ws = path.join(cwd, "workspace");
+  await mkdir(path.join(ws, "docs"), { recursive: true });
+  await mkdir(runDir, { recursive: true });
+  await writeFile(path.join(ws, "docs", "AUTOCODEX_TEST.md"), "task output\n", "utf8");
+  await writeFile(path.join(runDir, "final-result.json"), JSON.stringify({ schemaVersion:1, runId, status:"ACCEPTED", finalReviewVerdict:"ACCEPT", totalCodingAttempts:1, reworkAttempts:0, finalWorkspacePath:ws, finalChangedFiles:["docs/AUTOCODEX_TEST.md"], finalValidationStatus:"PASS", finalReviewReportPath:path.join(runDir,"review-report.json") }), "utf8");
+  const out = await readRunOutput(runId, "docs/AUTOCODEX_TEST.md", { cwd, runsDir });
+  expect(out).toEqual({ path: "docs/AUTOCODEX_TEST.md", content: "task output\n" });
+});

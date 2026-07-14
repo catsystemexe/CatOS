@@ -35,16 +35,17 @@
     <section class="execution-panel">
       <section class="run-panel">
         <h2>RUN</h2>
-        <div id="currentStep" class="current-step">No run started.</div>
-        <table>
-          <thead><tr><th>#</th><th>STEP</th><th>STATUS</th><th>TIME</th></tr></thead>
-          <tbody id="timeline"></tbody>
-        </table>
-        <div id="system"></div>
+        <div class="run-summary"><div><strong>Status:</strong> <span id="summaryStatus">idle</span></div><div><strong>Elapsed:</strong> <span id="summaryElapsed">00:00</span></div><div><strong>Current step:</strong> <span id="currentStep">No run started.</span></div><div><strong>Message:</strong> <span id="terminalMessage">No run started.</span></div></div>
+        <div class="timeline-wrap"><table>
+          <thead><tr><th>#</th><th>STEP</th><th>STATUS</th><th>TIME</th><th>MESSAGE</th></tr></thead>
+          <tbody id="timeline"><tr><td colspan="5">Waiting for first timeline event</td></tr></tbody>
+        </table></div>
+        <section id="errorPanel" class="error-panel" hidden><h3>Error</h3><div id="errorMessage">No error details available</div><div id="failedStep"></div><details><summary>Technical details</summary><pre id="errorDetails"></pre></details></section>
+        <details id="technicalDetails"><summary>Technical details</summary><pre id="system"></pre></details>
       </section>
       <section class="output-panel">
         <h2>OUTPUT</h2>
-        <div class="viewer-actions"><div id="viewerTitle">No output available yet.</div><button id="copy" type="button">COPY</button></div>
+        <div id="outputList" class="output-list">No generated files</div><div class="viewer-actions"><div id="viewerTitle">No output available yet.</div><button id="copy" type="button" disabled>COPY</button></div>
         <pre id="viewer"></pre>
       </section>
     </section>

@@ -2,7 +2,7 @@ import { analyzeTaskBrief, writeTaskBrief, type TaskAnalystProvider } from "../a
 import { loadProjectConfig } from "../config/loadConfig.js";
 import { resolveRepositoryRunConfig } from "../repositoryRunConfig.js";
 import { validateManualRepository } from "../repositoryDiscovery.js";
-import { writeFile } from "node:fs/promises";
+import { stat, writeFile } from "node:fs/promises";
 import { createRun } from "../runs/createRun.js";
 import { CodexSdkWorker, writeCodingArtifacts, type CodingWorker, normalizeWorkBranchName, buildIsolatedWorkspacePath } from "../codingWorker.js";
 import { ShellValidationRunner, buildValidationCommands, writeValidationReport, type ValidationRunner } from "../validationRunner.js";
@@ -27,6 +27,13 @@ function readOption(args: string[], name: string): string | undefined {
   const index = args.indexOf(name);
   if (index === -1) return undefined;
   return args[index + 1];
+}
+
+async function isTracked(workspacePath: string, file: string): Promise<boolean> {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
+  try { await execFileAsync("git", ["-C", workspacePath, "ls-files", "--error-unmatch", "--", file]); return true; } catch { return false; }
 }
 
 export async function runCommand(args: string[], options: RunCliOptions = {}): Promise<void> {
@@ -262,10 +269,22 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
   } else {
     finalStatus = "REWORK_LIMIT_REACHED";
   }
+  const finalChangedFileObjects = await Promise.all(codingResult.changedFiles.map(async file => {
+    let exists = false;
+    try { exists = (await stat(path.join(codingResult.workspacePath, file))).isFile(); } catch {}
+    return { path: file, changeType: (exists ? (await isTracked(codingResult.workspacePath, file) ? "modified" : "created") : "deleted") as "created" | "modified" | "deleted", exists };
+  }));
+  const finalOutputs = finalChangedFileObjects.filter(file => file.exists && /\.(md|txt|json|diff|log|ts|tsx|js|css|html|ya?ml)$/i.test(file.path)).map(file => ({ label: path.basename(file.path), path: file.path, type: "file" as const, contentAvailable: true }));
   const finalResult: FinalResult = {
     schemaVersion: 1,
     runId: run.runId,
     status: finalStatus,
+    terminalMessage: finalStatus === "ACCEPTED" ? "TASK COMPLETE" : finalStatus === "HUMAN_REQUIRED" ? "HUMAN REVIEW REQUIRED" : "TASK FAILED",
+    error: finalStatus === "REWORK_LIMIT_REACHED" ? { code: "attempt_exhaustion", message: reviewReport.summary || "Rework attempts exhausted.", stepId: currentStep.stepId, details: reviewReport.blockingFindings.map(f => `${f.title}: ${f.requiredChange}`).join("\n") } : null,
+    workspacePath: codingResult.workspacePath,
+    changedFiles: finalChangedFileObjects,
+    outputs: finalOutputs,
+    finalResponse: codingResult.finalResponse,
     finalReviewVerdict: reviewReport.verdict,
     totalCodingAttempts: 1 + reworkAttempts,
     reworkAttempts,
