@@ -22,28 +22,24 @@ async function repo(r: string, n = "repo") {
   return p;
 }
 
-test("repo selector is populated from scan API and branches load", async () => {
+test("repo selector is populated from GitHub API only while manual branches still load locally", async () => {
   const cwd = await root();
   const managed = path.join(cwd, "managed");
   const owner = path.join(managed, "test-owner");
   const a = await repo(owner, "a");
-  const b = await repo(owner, "b");
+  await repo(owner, "b");
   await writeFile(path.join(cwd, "catos.config.yaml"), `repositoryRoots:\n  - ${managed}\n`);
   const env = { CATOS_REPOSITORIES_ROOT: managed } as NodeJS.ProcessEnv;
   const res = await listRepositories({
     cwd,
     env,
     githubProvider: async () => ({
-      repositories: [],
-      github: { available: false, error: "GitHub repositories unavailable.", code: "credentials_unavailable" },
+      repositories: [{ id: 1, name: "remote", fullName: "owner/remote", cloneUrl: "https://github.com/owner/remote.git", defaultBranch: "main", isPrivate: false }],
+      github: { available: true, error: null },
     }),
   });
-  const localPaths = res.repositories
-    .filter((r) => r.source === "local")
-    .map((r) => r.localPath ?? r.path)
-    .filter(Boolean)
-    .sort();
-  expect(localPaths).toEqual([a, b].sort());
+  expect(res).toMatchObject({ total: 1, githubCount: 1, localCount: 0 });
+  expect(res.repositories).toEqual([{ id: "github:owner/remote", source: "github", name: "owner/remote", fullName: "owner/remote", cloneUrl: "https://github.com/owner/remote.git", defaultBranch: "main", isPrivate: false, isAvailableLocally: false }]);
   const branches = await listBranches(a);
   expect(branches.branches.map((b) => b.name)).toContain("main");
 });
