@@ -4,11 +4,11 @@ import type { Attempt, Session } from "./runs/sessionModel.js";
 
 export type UiRunStatus = "idle" | "running" | "human_required" | "completed" | "failed" | "stopped";
 export type UiTimelineStatus = "completed" | "failed" | "rework" | "running" | "waiting" | "stopped";
-export type UiTimelineRow = { id:string; index: number; name?: string; label: string; status: UiTimelineStatus; startedAt?: string; finishedAt?: string; durationMs?: number; message?: string; output?: { label: string; path: string; type?: "file"; contentAvailable?: boolean }; artifactPath?: string };
+export type UiTimelineRow = { id:string; index: number; name: "CODEX"|"VALIDATION"|"REVIEW"; label: string; status: UiTimelineStatus; startedAt?: string; finishedAt?: string; durationMs?: number; message?: string; summary?: string; errorDetails?: string; filesCreated?: string[]; filesModified?: string[]; filesDeleted?: string[]; output?: { label: string; path: string; type?: "file"; contentAvailable?: boolean }; artifactPath?: string; resultFile?: { label:string; path:string; readable:boolean } };
 export type UiRunError = { code:string; message:string; stepId?:string; details?:string };
 export type UiChangedFile = { path:string; changeType:"created"|"modified"|"deleted"; exists:boolean };
-export type UiOutput = { label:string; path:string; type?:"file"; contentAvailable?:boolean; kind?:string; readable?:boolean };
-export type UiSystemState = { humanReview: boolean; terminalMessage?: "TASK COMPLETE" | "TASK FAILED" | "TASK STOPPED" | "HUMAN REVIEW REQUIRED"; error: UiRunError|null; workspacePath?: string; changedFiles: UiChangedFile[]; outputs: UiOutput[]; finalResponse?: string; raw?: unknown };
+export type UiOutput = { label:string; path:string; type?:"file"; contentAvailable?:boolean; kind?:string; readable?:boolean; downloadable?:boolean };
+export type UiSystemState = { humanReview: boolean; terminalMessage?: "TASK COMPLETE" | "TASK FAILED" | "TASK STOPPED" | "HUMAN REVIEW REQUIRED"; error: UiRunError|null; workspacePath?: string; changedFiles: UiChangedFile[]; outputs: UiOutput[]; steps: UiTimelineRow[]; finalReport: { label:string; path:string; readable:boolean; downloadable:boolean }; finalResponse?: string };
 
 async function exists(file: string): Promise<boolean> { try { await stat(file); return true; } catch { return false; } }
 async function readJson<T>(file: string): Promise<T | undefined> { try { return JSON.parse(await readFile(file, "utf8")) as T; } catch { return undefined; } }
@@ -24,22 +24,25 @@ function legacyStatus(s?:string): UiRunStatus { if(s === "ACCEPTED" || s === "co
 function reviewMessage(verdict?:string, validation?:string){ if(verdict === "REWORK") return validation && validation !== "PASS" ? `Validation failed: ${validation}.` : "Review requested rework, but no reason was recorded."; if(verdict === "HUMAN_REQUIRED") return "Human review required."; if(verdict === "ACCEPT") return "Review accepted changes."; return undefined; }
 
 export async function buildUiTimeline(runDir: string): Promise<UiTimelineRow[]> {
-  const rows: UiTimelineRow[] = [];
   const session = await readJson<Session>(path.join(runDir, "session.json"));
-  if (!session) return rows;
+  if (!session) return [];
   const attempts = (await findFiles(path.join(runDir, "steps"), "attempt.json")).concat(await findFiles(path.join(runDir, "attempts"), "attempt.json"));
   const parsed = (await Promise.all(attempts.map(async f => ({ file: f, attempt: await readJson<Attempt>(f) })))).filter((x): x is { file: string; attempt: Attempt } => !!x.attempt).sort((a,b) => a.attempt.order - b.attempt.order || a.file.localeCompare(b.file));
-  for (const { file, attempt } of parsed) {
-    const dir = path.dirname(file); const isRework = attempt.order > 1 || path.relative(runDir, dir).startsWith("attempts");
-    const coding = await firstExisting(runDir, dir, [attempt.artifacts.codingResultPath, "coding-result.json"]);
-    rows.push({ id:`${attempt.attemptId}:codex`, index: rows.length+1, name:"Codex", label: isRework ? `Run Codex rework #${Math.max(1, attempt.order - 1)}` : "Run Codex task", status: attempt.status === "running" ? "running" : attempt.status === "cancelled" ? "stopped" : attempt.status === "failed" ? "failed" : "completed", startedAt:attempt.startedAt, finishedAt:attempt.completedAt, durationMs:durMs(attempt.startedAt, attempt.completedAt), message: attempt.errorSummary || (attempt.changedFiles?.length ? `Changed files: ${attempt.changedFiles.join(", ")}` : "Codex attempt completed."), output: relToRun(runDir, coding) });
-    const validation = await firstExisting(runDir, dir, [attempt.artifacts.validationReportPath, "validation-report.json"]);
-    const vr = validation ? await readJson<{ status?: string; results?: Array<{name?:string;status?:string;summary?:string}> }>(path.join(runDir, validation)) : undefined;
-    if (validation) rows.push({ id:`${attempt.attemptId}:validation`, index: rows.length+1, name:"Validation", label:"Run validation", status: vr?.status === "PASS" ? "completed" : "failed", message: vr?.status === "PASS" ? "Repository checks passed; task output not yet verified." : `Repository checks failed: ${vr?.status ?? "unknown"}.`, output: relToRun(runDir, validation) });
-    const review = await firstExisting(runDir, dir, [attempt.artifacts.reviewReportPath, "review-report.json", "review-package.md"]);
-    if (review) { const rr = review.endsWith(".json") ? await readJson<{ verdict?: string; summary?:string; blockingFindings?: unknown[] }>(path.join(runDir, review)) : undefined; rows.push({ id:`${attempt.attemptId}:review`, index: rows.length+1, name:"Review", label:"Review changes", status: rr?.verdict === "ACCEPT" ? "completed" : rr?.verdict === "REWORK" || rr?.verdict === "HUMAN_REQUIRED" ? "rework" : rr ? "failed" : "completed", message: rr?.summary || reviewMessage(rr?.verdict, vr?.status), output: relToRun(runDir, review) }); }
-  }
-  return rows.map((r, i) => { const index=i+1; const slug=r.label.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").replace(/^run-/,"")||"step"; return { ...r, index, artifactPath: path.join("steps",`${String(index).padStart(2,"0")}-${slug}`,"result.md") }; });
+  const latest = parsed.at(-1);
+  if (!latest) return [];
+  const { file, attempt } = latest; const dir = path.dirname(file);
+  const coding = await firstExisting(runDir, dir, [attempt.artifacts.codingResultPath, "coding-result.json"]);
+  const validation = await firstExisting(runDir, dir, [attempt.artifacts.validationReportPath, "validation-report.json"]);
+  const vr = validation ? await readJson<{ status?: string; results?: Array<{name?:string;status?:string;summary?:string}> }>(path.join(runDir, validation)) : undefined;
+  const review = await firstExisting(runDir, dir, [attempt.artifacts.reviewReportPath, "review-report.json", "review-package.md"]);
+  const rr = review?.endsWith(".json") ? await readJson<{ verdict?: string; summary?:string; blockingFindings?: unknown[] }>(path.join(runDir, review)) : undefined;
+  const changed = attempt.changedFiles ?? [];
+  const rows: UiTimelineRow[] = [
+    { id:`${attempt.attemptId}:codex`, index:1, name:"CODEX", label:"CODEX", status: attempt.status === "running" ? "running" : attempt.status === "cancelled" ? "stopped" : attempt.status === "failed" ? "failed" : "completed", startedAt:attempt.startedAt, finishedAt:attempt.completedAt, durationMs:durMs(attempt.startedAt, attempt.completedAt), message: attempt.errorSummary || (changed.length ? `Changed files: ${changed.join(", ")}` : "Codex attempt completed."), filesModified: changed, output: relToRun(runDir, coding) },
+    { id:`${attempt.attemptId}:validation`, index:2, name:"VALIDATION", label:"VALIDATION", status: validation ? (vr?.status === "PASS" ? "completed" : "failed") : "waiting", message: validation ? (vr?.status === "PASS" ? "Repository checks passed; task output not yet verified." : `Repository checks failed: ${vr?.status ?? "unknown"}.`) : undefined, output: relToRun(runDir, validation) },
+    { id:`${attempt.attemptId}:review`, index:3, name:"REVIEW", label:"REVIEW", status: review ? (rr?.verdict === "ACCEPT" ? "completed" : rr?.verdict === "REWORK" || rr?.verdict === "HUMAN_REQUIRED" ? "rework" : rr ? "failed" : "completed") : "waiting", message: review ? (rr?.summary || reviewMessage(rr?.verdict, vr?.status)) : undefined, output: relToRun(runDir, review) }
+  ];
+  return rows.map((r) => ({ ...r, resultFile: { label: `${String(r.index).padStart(2,"0")}_${r.name}.md`, path: `${String(r.index).padStart(2,"0")}_${r.name}.md`, readable: true }, artifactPath: `${String(r.index).padStart(2,"0")}_${r.name}.md` }));
 }
 
 async function deriveError(runDir:string, status:UiRunStatus): Promise<UiRunError|null> { if(status !== "failed") return null; const final=await readJson<any>(path.join(runDir,"final-result.json")); if(final?.error) return final.error; const rows=await buildUiTimeline(runDir); const bad=[...rows].reverse().find(r=>r.status === "failed" || r.status === "rework"); return { code: final?.status === "REWORK_LIMIT_REACHED" ? "attempt_exhaustion" : "run_failed", message: bad?.message || "Run failed.", stepId: bad?.id, details: final ? JSON.stringify(final,null,2) : undefined } }
@@ -47,9 +50,8 @@ export async function getUiRunStatus(runDir?: string): Promise<UiRunStatus> { if
 export async function buildUiSystemState(runDir: string): Promise<UiSystemState> { const status=await getUiRunStatus(runDir); const final=await readJson<any>(path.join(runDir,"final-result.json")); const workspacePath=final?.workspacePath ?? final?.finalWorkspacePath; let changedFiles:UiChangedFile[] = Array.isArray(final?.changedFiles) ? final.changedFiles : [];
   if(!changedFiles.length && Array.isArray(final?.finalChangedFiles)) changedFiles=await Promise.all(final.finalChangedFiles.map(async (f:string)=>({path:f,changeType:"modified" as const,exists:workspacePath?await exists(path.join(workspacePath,f)):false})));
   if(!changedFiles.length && workspacePath) changedFiles=await gitChangedFiles(workspacePath);
-  const userOutputs:UiOutput[] = Array.isArray(final?.outputs) ? final.outputs : await outputsFromChanged(workspacePath, changedFiles);
-  const artifacts:UiOutput[] = Array.isArray(final?.runArtifacts) ? final.runArtifacts.map((a:any)=>({...a,type:"file",contentAvailable:a.readable})) : [];
-  const report = artifacts.find(a=>a.kind==="session-report") || ((await exists(path.join(runDir,"AUTOCODEX_SESSION_REPORT.md"))) ? {label:"AutoCodex session report",path:"AUTOCODEX_SESSION_REPORT.md",type:"file" as const,contentAvailable:true,kind:"session-report",readable:true} : undefined);
-  const steps = artifacts.filter(a=>a.kind!=="session-report");
-  const outputs:UiOutput[] = [...userOutputs, ...(report && !userOutputs.some(o=>o.path===report.path) ? [report] : []), ...steps.filter(a=>!userOutputs.some(o=>o.path===a.path) && a.path!==report?.path)];
-  return { humanReview: status === "human_required", terminalMessage: status === "completed" ? "TASK COMPLETE" : status === "failed" ? "TASK FAILED" : status === "stopped" ? "TASK STOPPED" : status === "human_required" ? "HUMAN REVIEW REQUIRED" : undefined, error: await deriveError(runDir,status), workspacePath: workspacePath ? "<run-workspace>" : undefined, changedFiles, outputs, finalResponse: final?.finalResponse, raw: final } }
+  const steps=await buildUiTimeline(runDir);
+  const reportExists=await exists(path.join(runDir,"FINAL_REPORT.md"));
+  const finalReport={label:"FINAL_REPORT.md",path:"FINAL_REPORT.md",readable:reportExists,downloadable:reportExists};
+  const outputs:UiOutput[] = [finalReport];
+  return { humanReview: status === "human_required", terminalMessage: status === "completed" ? "TASK COMPLETE" : status === "failed" ? "TASK FAILED" : status === "stopped" ? "TASK STOPPED" : status === "human_required" ? "HUMAN REVIEW REQUIRED" : undefined, error: await deriveError(runDir,status), workspacePath: workspacePath ? "<run-workspace>" : undefined, changedFiles, outputs, steps, finalReport, finalResponse: final?.finalResponse } }

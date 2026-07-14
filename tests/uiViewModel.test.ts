@@ -18,7 +18,7 @@ test("UI script and markup render GitHub-first checkout controls", async () => {
   expect(app).toContain("/api/github/clone-branch");
   expect(app).not.toContain("r.source==='github'?(r.fullName||r.name):r.name");
   expect(app).not.toContain("gpt-handoff");
-  expect(html).toContain("No output available yet.");
+  expect(html).toContain("FINAL_REPORT.md");
   expect(html).toContain("Git repository");
   expect(html).toContain('id="selectedRepositoryName"');
   expect(html).toContain("Local clone");
@@ -147,7 +147,6 @@ test("RUN state model starts first and only shows running after a valid runId", 
 
 test("RUN timeline shows empty and polling error states without empty catch", async () => {
   const { app, html } = await uiFiles();
-  expect(html).toContain("No run started.");
   expect(app).toContain("Waiting for first timeline event…");
   expect(app).toContain("Timeline unavailable: ${safeMessage(e)}");
   expect(app).not.toContain("catch{}");
@@ -160,32 +159,30 @@ test("STOP is phase-driven and terminal states do not return to running", async 
   expect(app).toContain("if(terminalPhases.has(phase)&&next==='running')return");
 });
 
-test("first available output is auto-selected", async () => {
-  const { app } = await uiFiles();
-  expect(app).toContain("async function autoSelectOutput()");
-  expect(app).toContain("const first=latestOutputs.find(o=>o.contentAvailable); if(first) await view(first.path,true);");
-  expect(app).toContain("$('viewerPath').textContent=path");
+test("OUTPUT exposes only final report actions", async () => {
+  const { app, html } = await uiFiles();
+  expect(html).toContain("FINAL_REPORT.md");
+  expect(html).toContain('id="copy" type="button" disabled>COPY');
+  expect(html).toContain('id="download" type="button" disabled>DOWNLOAD');
+  expect(app).toContain("latestSystem?.finalReport");
+  expect(app).not.toContain("async function autoSelectOutput()");
+  expect(app).not.toContain("viewerPath");
 });
 
-test("RUN and OUTPUT UI hide raw JSON in collapsed details and use generated files", async () => {
+test("RUN and OUTPUT UI hide raw JSON and obsolete controls", async () => {
   const { app, html, css } = await uiFiles();
-  expect(html).toContain('id="technicalDetails"');
-  expect(html).toContain('id="errorPanel"');
-  expect(html).toContain('id="outputList" class="output-select" hidden');
-  expect(app).toContain("latestSystem?.outputs?.length?latestSystem.outputs");
-  expect(app).toContain("No readable output file was produced.");
-  expect(app).toContain("$('copy').disabled=!res.content");
-  expect(app).toContain("async function copyText(text)");
-  expect(app).toContain("document.execCommand('copy')");
-  expect(app).toContain("rowStep(r){return r.name||r.label||r.type||'Unnamed step';}");
-  expect(app).not.toContain("rowStep(r){return r.step||r.name||r.path||r.summary||'step';}");
-  expect(html).not.toContain("run-summary");
+  expect(html).not.toContain('id="technicalDetails"');
+  expect(html).not.toContain('id="errorPanel"');
+  expect(html).not.toContain('id="outputList"');
+  expect(html).not.toContain('viewerPath');
+  expect(html).not.toContain('Technical details');
+  expect(html).not.toContain('session report');
+  expect(app).not.toContain("$('system')");
+  expect(app).not.toContain("outputList");
+  expect(app).toContain("data-step-path");
+  expect(app).toContain("const disabled=!rf?.readable||!rf?.path?' disabled':''");
   expect(html).not.toContain("<table>");
   expect(html).toContain('<div id="timeline" class="timeline-list"');
-  expect(html).toContain('<details id="technicalDetails"><summary>Technical details</summary>');
-  expect((html.match(/Technical details/g)||[]).length).toBe(1);
-  expect(css).toContain(".timeline-row{display:grid;grid-template-columns:3ch minmax(8ch,1fr) 10ch 8ch");
-  expect(css).toContain(".timeline-message{grid-column:2 / -1");
-  expect(css).toContain(".run-panel{overflow:hidden}");
-  expect(css).toContain("#errorDetails,#system{max-height:160px;overflow:auto");
+  expect(css).toContain(".timeline-row{display:grid;grid-template-columns:24px minmax(100px,1fr) 100px 64px 56px");
+  expect(css).toContain(".step-copy");
 });

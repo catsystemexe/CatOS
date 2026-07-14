@@ -71,7 +71,7 @@ export async function writeFinalResult(runDir: string, finalResult: FinalResult)
     ...draft,
     runArtifacts: [
       ...(draft.runArtifacts ?? stepArtifacts),
-      { label: "AutoCodex session report", path: "AUTOCODEX_SESSION_REPORT.md", kind: "session-report", readable: true },
+      { label: "FINAL_REPORT.md", path: "FINAL_REPORT.md", kind: "final-report", readable: true },
     ],
   });
   await writeFile(filePath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
