@@ -2,6 +2,9 @@ import { describe, expect, test } from "vitest";
 import { mkdtemp, mkdir, stat, writeFile } from "node:fs/promises";
 import os from "node:os"; import path from "node:path"; import { execFile } from "node:child_process"; import { promisify } from "node:util";
 import { cloneGithubRepository, cloneTarget, githubRepos, githubReposFromToken, githubToken, mergeRepositories, normalizeGithubRemote, originHasCredentials, safeSegment, type ExecLike, type FetchLike, type GithubRepo } from "../src/githubRepositories.js";
+import { discoverRepositories } from "../src/repositoryDiscovery.js";
+import { listBranches, listRepositories } from "../src/uiApi.js";
+import { findRepository } from "../src/ui/repositorySelection.js";
 import type { RepositoryOption } from "../src/repositoryDiscovery.js";
 const exec=promisify(execFile); async function tmp(){return mkdtemp(path.join(os.tmpdir(),"catos-gh-"));} async function repo(r:string,n="repo"){const p=path.join(r,n); await mkdir(p,{recursive:true}); await exec("git",["init","-b","main"],{cwd:p}); await writeFile(path.join(p,"README.md"),"x"); await exec("git",["add","."],{cwd:p}); await exec("git",["-c","user.name=t","-c","user.email=t@e.invalid","commit","-m","init"],{cwd:p}); return p;}
 function rawGithubApiRepo(id:number,name:string,priv=false){return {id,name,full_name:`o/${name}`,clone_url:`https://github.com/o/${name}.git`,ssh_url:`git@github.com:o/${name}.git`,default_branch:"main",private:priv,html_url:`https://github.com/o/${name}`};}
@@ -18,5 +21,29 @@ describe("GitHub repository helpers",()=>{
  test("deduplicates local GitHub origins and preserves order",async()=>{const r=await tmp(); const p=await repo(r,"local"); await exec("git",["-C",p,"remote","add","origin","git@github.com:O/Local.git"]); const local:RepositoryOption[]=[{id:p,source:"local",name:"local",path:p,localPath:p,isAvailableLocally:true}]; const merged=await mergeRepositories(local,[normalizedGithubRepo(1,"local","o/local"),normalizedGithubRepo(2,"remote","o/remote")]); expect(merged.map(x=>x.id)).toEqual([p,"github:o/remote"]); expect(merged[0]?.fullName).toBe("o/local");});
  test("clone target stays under managed root and rejects traversal",()=>{const root=path.join(os.tmpdir(),"managed"); expect(cloneTarget("owner/repo",root)).toBe(path.join(root,"owner","repo")); expect(()=>cloneTarget("../repo",root)).toThrow(); expect(()=>safeSegment("bad/name")).toThrow();});
  test("credential detector catches tokens and userinfo",()=>{expect(originHasCredentials("https://user:pass@github.com/o/r.git")).toBe(true); expect(originHasCredentials("https://oauth2:token@github.com/o/r.git")).toBe(true); expect(originHasCredentials("https://github.com/o/r.git")).toBe(false);});
+ test("integration clone workflow uses a real local bare repository without GitHub network",async()=>{
+  const r=await tmp(); const source=await repo(r,"source"); await exec("git",["-C",source,"checkout","-b","feature/local-clone"]); await writeFile(path.join(source,"feature.txt"),"feature"); await exec("git",["-C",source,"add","."]); await exec("git",["-C",source,"-c","user.name=t","-c","user.email=t@e.invalid","commit","-m","feature"]);
+  const bare=path.join(r,"source.git"); await exec("git",["clone","--bare",source,bare]);
+  const managedRoot=path.join(r,"managed"); const cwd=path.join(r,"cwd"); await mkdir(cwd,{recursive:true}); await writeFile(path.join(cwd,"catos.config.yaml"),`repositoryRoots:
+  - ${managedRoot}
+`);
+  const previousRoot=process.env.CATOS_REPOSITORIES_ROOT; process.env.CATOS_REPOSITORIES_ROOT=managedRoot;
+  try{
+   const githubRepo=normalizedGithubRepo(42,"repo","owner/repo"); githubRepo.cloneUrl=bare;
+   const githubProvider=async()=>({repositories:[githubRepo],github:{available:true,error:null}});
+   const before=await listRepositories({cwd,env:{},githubProvider});
+   expect(before.repositories).toHaveLength(1); expect(before.repositories[0]).toMatchObject({id:"github:owner/repo",source:"github",isAvailableLocally:false});
+   const cloned=await cloneGithubRepository("github:owner/repo",before.repositories,undefined,{} as NodeJS.ProcessEnv);
+   const expectedTarget=path.join(managedRoot,"owner","repo");
+   expect(cloned.localPath).toBe(expectedTarget); expect(cloned.path).toBe(expectedTarget); expect(cloned.isAvailableLocally).toBe(true); expect(cloned.currentBranch).toBe("feature/local-clone"); expect(cloned.branches?.map(b=>b.name)).toContain("feature/local-clone");
+   await expect(exec("git",["-C",expectedTarget,"rev-parse","--is-inside-work-tree"])).resolves.toMatchObject({stdout:"true\n"});
+   await expect(exec("git",["-C",expectedTarget,"rev-parse","--verify","feature/local-clone"])).resolves.toBeTruthy();
+   const origin=(await exec("git",["-C",expectedTarget,"remote","get-url","origin"])).stdout.trim(); expect(origin).toBe(bare); expect(originHasCredentials(origin)).toBe(false);
+   const discovered=await discoverRepositories([managedRoot],cwd); expect(discovered.map(repo=>repo.path)).toContain(expectedTarget);
+   const refreshed=await listRepositories({cwd,env:{},githubProvider}); expect(refreshed.repositories).toHaveLength(1); expect(refreshed.repositories[0]).toMatchObject({source:"local",fullName:"owner/repo",localPath:expectedTarget,isAvailableLocally:true});
+   const branches=await listBranches(expectedTarget); expect(branches.branches.map(b=>b.name)).toContain("feature/local-clone");
+   const matched=findRepository(refreshed.repositories,cloned); expect(matched?.localPath).toBe(expectedTarget); expect(matched?.id).not.toBe(process.cwd()); expect(refreshed.repositories[0]?.localPath).toBe(expectedTarget);
+  }finally{ if(previousRoot===undefined) delete process.env.CATOS_REPOSITORIES_ROOT; else process.env.CATOS_REPOSITORIES_ROOT=previousRoot; }
+ });
  test("clone uses GIT_ASKPASS, clean URL, and removes helper on success",async()=>{const root=await tmp(); process.env.CATOS_REPOSITORIES_ROOT=root; const calls:Record<string,unknown>[]=[]; let helper=""; const fake:ExecLike=async(file,args,opts={})=>{calls.push({file,args,opts}); if(args[0]==="clone"){expect(args[1]).toBe("https://github.com/o/private.git"); expect(String(args[1])).not.toContain("token"); helper=String((opts.env as Record<string,string>).GIT_ASKPASS); throw new Error("clone failed");} if(args.includes("remote")&&args.includes("get-url")) return {stdout:"https://github.com/o/private.git"}; return {stdout:""};}; await expect(cloneGithubRepository("github:o/private",[{id:"github:o/private",source:"github",name:"o/private",fullName:"o/private",cloneUrl:"https://github.com/o/private.git",isAvailableLocally:false}],fake,{GITHUB_TOKEN:"token"} as NodeJS.ProcessEnv)).rejects.toThrow("clone failed"); await expect(stat(helper)).rejects.toThrow(); delete process.env.CATOS_REPOSITORIES_ROOT;});
 });
