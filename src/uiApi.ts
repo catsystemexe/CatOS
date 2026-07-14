@@ -5,6 +5,7 @@ import { parse } from "yaml";
 import { ZodError } from "zod";
 import { loadProjectConfig } from "./config/loadConfig.js";
 import { loadRepositoryRoots, discoverRepositories, listRepositoryBranches, validateManualRepository } from "./repositoryDiscovery.js";
+import { cloneGithubRepository, githubRepos, mergeRepositories } from "./githubRepositories.js";
 import { projectConfigSchema } from "./config/projectConfigSchema.js";
 import { buildUiSystemState, buildUiTimeline, getUiRunStatus } from "./uiViewModel.js";
 import { writeSessionReport } from "./finalExport.js";
@@ -42,7 +43,8 @@ export async function listProjects(ctx: UiContext = {}): Promise<UiProjectSummar
     }catch(error){ if(error instanceof ZodError) return invalidSummary(f,"invalid project config",parsed); return invalidSummary(f,"invalid project config",parsed); } })); }
 
 export type UiStartRunInput = { repositoryPath: string; baseBranch: string; prTargetBranch: string; task: string };
-export async function listRepositories(ctx:UiContext={}){ return {repositories: await discoverRepositories(await loadRepositoryRoots(cwdOf(ctx)), cwdOf(ctx))}; }
+export async function listRepositories(ctx:UiContext={}){ const local=await discoverRepositories(await loadRepositoryRoots(cwdOf(ctx)), cwdOf(ctx)); const gh=await githubRepos(); return {repositories: await mergeRepositories(local,gh.repositories), github: gh.github}; }
+export async function cloneRepository(repositoryId:string, ctx:UiContext={}){ const listed=await listRepositories(ctx); const repository=await cloneGithubRepository(repositoryId,listed.repositories); return {repository}; }
 export async function loadManualRepository(repositoryPath:string){ return {repository: await validateManualRepository(repositoryPath), branches: await listRepositoryBranches(repositoryPath)}; }
 export async function listBranches(repositoryPath:string){ return {branches: await listRepositoryBranches(repositoryPath)}; }
 export async function getProjectConfig(projectId:string, ctx:UiContext={}) { return (await listProjects(ctx)).find(p=>p.id===projectId); }
