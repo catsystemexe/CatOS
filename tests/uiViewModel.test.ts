@@ -126,7 +126,7 @@ test("layout keeps actions visible, wraps long values, and prevents page scrolli
   expect(css).toContain(".setup-panel{border:1px solid #000;padding:8px;display:grid;grid-template-rows:auto auto auto auto minmax(90px,1fr) auto auto");
   expect(css).toContain(".execution-panel{display:grid;grid-template-rows:minmax(0,3fr) minmax(0,2fr)");
   expect(css).toContain(".value-readout{display:block;white-space:normal;overflow-wrap:anywhere;word-break:break-word");
-  expect(css).toContain("#viewer{flex:1 1 auto;min-height:0;margin:0;overflow:auto");
+  expect(css).toContain("#viewer{display:none}");
   expect(css).not.toContain("text-overflow:ellipsis");
   expect(css).not.toContain("text-overflow: ellipsis");
 });
@@ -163,8 +163,8 @@ test("STOP is phase-driven and terminal states do not return to running", async 
 test("first available output is auto-selected", async () => {
   const { app } = await uiFiles();
   expect(app).toContain("async function autoSelectOutput()");
-  expect(app).toContain("const first=latestRows.map(rowOutputPath).find(Boolean); if(first) await view(first,true);");
-  expect(app).toContain("$('viewerTitle').textContent=selected");
+  expect(app).toContain("const first=latestOutputs.find(o=>o.contentAvailable); if(first) await view(first.path,true);");
+  expect(app).toContain("$('viewerPath').textContent=path");
 });
 
 test("RUN and OUTPUT UI hide raw JSON in collapsed details and use generated files", async () => {

@@ -280,7 +280,7 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
     runId: run.runId,
     status: finalStatus,
     terminalMessage: finalStatus === "ACCEPTED" ? "TASK COMPLETE" : finalStatus === "HUMAN_REQUIRED" ? "HUMAN REVIEW REQUIRED" : "TASK FAILED",
-    error: finalStatus === "REWORK_LIMIT_REACHED" ? { code: "attempt_exhaustion", message: reviewReport.summary || "Rework attempts exhausted.", stepId: currentStep.stepId, details: reviewReport.blockingFindings.map(f => `${f.title}: ${f.requiredChange}`).join("\n") } : null,
+    error: finalStatus === "REWORK_LIMIT_REACHED" ? { code: "attempt_exhaustion", message: reviewReport.summary || "Review requested rework, but no reason was recorded.", stepId: currentStep.stepId, details: reviewReport.blockingFindings.map(f => `${f.title}: ${f.requiredChange}`).join("\n") } : null,
     workspacePath: codingResult.workspacePath,
     changedFiles: finalChangedFileObjects,
     outputs: finalOutputs,

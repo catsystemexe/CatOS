@@ -16,8 +16,17 @@ export const changedFileSchema = z.object({
 export const outputFileSchema = z.object({
   label: z.string().min(1),
   path: z.string().min(1),
-  type: z.literal("file"),
-  contentAvailable: z.boolean(),
+  type: z.literal("file").optional(),
+  contentAvailable: z.boolean().optional(),
+  kind: z.string().optional(),
+  readable: z.boolean().optional(),
+});
+
+export const runArtifactSchema = z.object({
+  label: z.string().min(1),
+  path: z.string().min(1),
+  kind: z.string().min(1),
+  readable: z.boolean(),
 });
 
 export const finalResultSchema = z.object({
@@ -29,6 +38,7 @@ export const finalResultSchema = z.object({
   workspacePath: z.string().optional(),
   changedFiles: z.array(changedFileSchema).optional(),
   outputs: z.array(outputFileSchema).optional(),
+  runArtifacts: z.array(runArtifactSchema).optional(),
   finalResponse: z.string().optional(),
   finalReviewVerdict: z.enum(["ACCEPT", "REWORK", "HUMAN_REQUIRED"]),
   totalCodingAttempts: z.number().int().positive(),
