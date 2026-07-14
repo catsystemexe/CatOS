@@ -6,10 +6,10 @@
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-  <header class="topbar">│ CatOS AutoCodex │ <span id="runNo">RUN #-</span> │ <span id="status">idle</span> │ <span id="elapsed">00:00</span> │</header>
-  <main class="commander-grid">
-    <section class="panel setup-panel">
-      <h2>┌─ SETUP ─────────────────────┐</h2>
+  <header class="topbar">CatOS AutoCodex | <span id="runNo">RUN #-</span> | <span id="status">idle</span> | <span id="elapsed">00:00</span></header>
+  <main class="app-layout">
+    <section class="setup-window">
+      <h2>SETUP</h2>
       <div class="repository-controls">
         <label><span>Git repository</span><select id="repository"></select></label>
         <label><span>Branch</span><select id="branch"></select></label>
@@ -18,27 +18,29 @@
       <button id="clone" type="button">CLONE</button>
       <label><span>Local clone</span><input id="repositoryPath" readonly></label>
       <label><span>Base branch</span><input id="baseBranch" readonly></label>
-      <p class="hint">Snapshot: Run snapshot will be created automatically.</p>
-      <label><span>Task</span><textarea id="task"></textarea></label>
+      <p class="hint">Snapshot: created automatically for each RUN.</p>
+      <label class="task-field"><span>Task</span><textarea id="task"></textarea></label>
       <p id="runReason" class="message"></p>
       <div class="run-actions">
         <button id="run" type="button">RUN</button>
         <button id="stop" type="button" disabled>STOP</button>
       </div>
     </section>
-    <section class="panel run-panel">
-      <h2>┌─ RUN ─────────────────────────────────────────────────────────┐</h2>
-      <div id="currentStep" class="current-step" hidden></div>
-      <table>
-        <thead><tr><th>#</th><th>STEP</th><th>STATUS</th><th>OUTPUT</th><th>TIME</th></tr></thead>
-        <tbody id="timeline"></tbody>
-      </table>
-      <div id="system"></div>
-    </section>
-    <section class="panel output-panel">
-      <h2>┌─ OUTPUT ───────────────────────────────────────┐</h2>
-      <div class="viewer-actions"><div id="viewerTitle">No output selected</div><button id="copy" type="button">copy</button></div>
-      <pre id="viewer" readonly></pre>
+    <section class="execution-window">
+      <section class="run-window">
+        <h2>RUN</h2>
+        <div id="currentStep" class="current-step" hidden></div>
+        <table>
+          <thead><tr><th>#</th><th>STEP</th><th>STATUS</th><th>OUTPUT</th><th>TIME</th></tr></thead>
+          <tbody id="timeline"></tbody>
+        </table>
+        <div id="system"></div>
+      </section>
+      <section class="output-window">
+        <h2>OUTPUT</h2>
+        <div class="viewer-actions"><div id="viewerTitle">No output selected</div><button id="copy" type="button">COPY</button></div>
+        <pre id="viewer" readonly></pre>
+      </section>
     </section>
   </main>
   <script type="module" src="/app.js"></script>
