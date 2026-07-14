@@ -4,7 +4,7 @@ export function canonicalEqual(a: unknown, b: unknown): boolean;
 export function findRepository<T extends RepositoryLike>(repositories: T[], wanted?: RepositoryLike): T | undefined;
 export function createBranchLoader<T extends RepositoryLike, B extends { name: string }>(options: {
   getSelectedRepository: () => T | undefined;
-  fetchBranches: (repoPath: string) => Promise<{ branches: B[] }>;
+  fetchBranches: (key: string, repo?: T) => Promise<{ branches: B[] }>;
   applyBranches: (branches: B[], repo: T) => void;
   clearBranches: () => void;
   setError: (message: string) => void;
