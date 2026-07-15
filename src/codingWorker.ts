@@ -2,6 +2,7 @@ import { access, lstat, mkdir, open, realpath, stat, unlink, writeFile } from "n
 import { createHash } from "node:crypto";
 import type { ReworkPackage } from "./schemas/reworkPackage.js";
 import type { TaskBrief } from "./schemas/taskBrief.js";
+import type { ExecutionPlan, PlannedStep, StepResult } from "./executionPlan.js";
 import path from "node:path";
 import { execFile, fork } from "node:child_process";
 import { collectWorkspaceGitState, type WorkspaceDiffCheck } from "./gitWorkspaceState.js";
@@ -27,6 +28,10 @@ export type SandboxIsolation = "enabled" | "disabled";
 export type CodingTask = {
   originalTask: string;
   taskBrief: TaskBrief;
+  executionPlan?: ExecutionPlan;
+  currentStep?: PlannedStep;
+  dependencyResults?: StepResult[];
+  stepStatuses?: Record<string, string>;
   repositoryPath: string;
   baseBranch: string;
   baseCommit?: string;
@@ -42,6 +47,10 @@ export type CodingTask = {
 export type ReworkCodingTask = {
   originalTask: string;
   taskBrief: TaskBrief;
+  executionPlan?: ExecutionPlan;
+  currentStep?: PlannedStep;
+  dependencyResults?: StepResult[];
+  stepStatuses?: Record<string, string>;
   threadId: string;
   workspacePath: string;
   workspaceRoot: string;
@@ -406,7 +415,92 @@ export function sha256Text(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-export function buildCodexInstruction(input: { originalTask: string; taskBrief: TaskBrief }): string {
+function renderPlanStatus(input: { executionPlan?: ExecutionPlan; currentStep?: PlannedStep; stepStatuses?: Record<string, string> }): string[] {
+  if (!input.executionPlan) return [];
+  return input.executionPlan.steps.map((step) => {
+    const status = step.id === input.currentStep?.id ? "current" : (input.stepStatuses?.[step.id] ?? "pending").toLowerCase();
+    return `- Step ${step.sequence}: ${step.title} — ${status}`;
+  });
+}
+
+function renderDependencyResults(results?: StepResult[]): string[] {
+  if (!results?.length) return ["- none"];
+  return results.flatMap((result) => [
+    `### Step ${result.sequence}: ${result.title}`,
+    `- stepId: ${result.stepId}`,
+    `- status: ${result.status}`,
+    `- accepted attempt: ${result.acceptedAttempt}`,
+    `- summary: ${result.summary}`,
+    `- accepted artifacts: ${result.acceptedArtifacts.join(", ") || "none"}`,
+    `- step result boundary: steps/${String(result.sequence).padStart(3, "0")}-${result.stepId}/step-result.json`,
+    "",
+  ]);
+}
+
+function renderStepCriteria(step?: PlannedStep, fallback?: TaskBrief): string[] {
+  const criteria = step?.acceptanceCriteria ?? fallback?.acceptanceCriteria ?? [];
+  return criteria.length ? criteria.map((c) => `- ${c}`) : ["- The original user task is completed."];
+}
+
+export function buildCodexInstruction(input: { originalTask: string; taskBrief: TaskBrief; executionPlan?: ExecutionPlan; currentStep?: PlannedStep; dependencyResults?: StepResult[]; stepStatuses?: Record<string, string> }): string {
+  if (input.executionPlan && input.currentStep) {
+    return [
+      "# Multi-step Coding task",
+      "",
+      "## Original user task — verbatim",
+      "",
+      input.originalTask,
+      "",
+      "## Execution plan",
+      "",
+      ...renderPlanStatus(input),
+      "",
+      "## Current Step",
+      "",
+      `- ID: ${input.currentStep.id}`,
+      `- sequence: ${input.currentStep.sequence}`,
+      `- title: ${input.currentStep.title}`,
+      "",
+      "## Current Step instruction — verbatim",
+      "",
+      input.currentStep.instruction,
+      "",
+      "## Current Step acceptance criteria",
+      "",
+      ...renderStepCriteria(input.currentStep, input.taskBrief),
+      "",
+      "## Approved dependency results",
+      "",
+      ...renderDependencyResults(input.dependencyResults),
+      "## Expected artifacts",
+      "",
+      ...(input.currentStep.expectedArtifacts.length ? input.currentStep.expectedArtifacts.map((a) => `- ${a}`) : ["- none"]),
+      "",
+      "## Validation policy",
+      "",
+      input.currentStep.validationPolicy,
+      "",
+      "## Constraints",
+      "",
+      ...(input.currentStep.constraints?.length ? input.currentStep.constraints.map((c) => `- ${c}`) : ["- none"]),
+      "",
+      "## Derived implementation guidance",
+      "",
+      input.taskBrief.codexInstruction,
+      "",
+      "## Execution rules",
+      "",
+      "- Complete only the current Planned Step. Do not implement or pre-empt future Steps unless the current Step explicitly requires shared preparatory work.",
+      "- The original user task is authoritative for literal requirements; derived guidance is additive and must not replace it.",
+      "- Do not commit, push, create a pull request, or merge. Leave Git publication to the Human Gate.",
+      "- Keep all work inside the provided isolated workspace and do not expose secrets.",
+      "",
+    ].join("\n");
+  }
+  return buildSingleStepCodexInstruction(input);
+}
+
+function buildSingleStepCodexInstruction(input: { originalTask: string; taskBrief: TaskBrief }): string {
   const taskBrief = input.taskBrief as TaskBriefWithOptionalFields;
   return [
     "# Coding task",
@@ -447,7 +541,23 @@ export function buildCodexInstruction(input: { originalTask: string; taskBrief: 
   ].join("\n");
 }
 
-export function buildReworkCodexInstruction(input: { originalTask: string; taskBrief: TaskBrief; reworkPackage: ReworkPackage; previousAttemptResult?: string; reviewVerdict?: string }): string {
+export function buildReworkCodexInstruction(input: { originalTask: string; taskBrief: TaskBrief; reworkPackage: ReworkPackage; previousAttemptResult?: string; reviewVerdict?: string; executionPlan?: ExecutionPlan; currentStep?: PlannedStep; dependencyResults?: StepResult[]; stepStatuses?: Record<string, string> }): string {
+  if (input.executionPlan && input.currentStep) {
+    return [
+      buildCodexInstruction(input),
+      "## Rework instructions",
+      "",
+      `- review verdict: ${input.reviewVerdict ?? "REWORK_STEP"}`,
+      `- previous attempt result: ${input.previousAttemptResult ?? input.reworkPackage.previousAttemptSummary}`,
+      "",
+      "### Blocking findings",
+      ...(input.reworkPackage.blockingFindings.length ? input.reworkPackage.blockingFindings.map((finding) => `- ${finding.id}: ${finding.title} — ${finding.evidence}. Required: ${finding.requiredChange}`) : ["- none recorded"]),
+      "",
+      "### Required changes",
+      ...linesOrDash(input.reworkPackage.mustChange),
+      "",
+    ].join("\n");
+  }
   const taskBrief = input.taskBrief as TaskBriefWithOptionalFields;
   return [
     "# Coding rework task",
@@ -829,7 +939,7 @@ export class CodexSdkWorker implements CodingWorker {
     const writeProbe = await probeWorkspaceWritable({ workspacePath: guarded.workspacePath, workspaceRoot: guarded.workspaceRoot, repositoryPath, runId: input.runId, git: this.git, openFile: this.workspaceProbeOpen });
     const runtime = await prepareRuntime({ workspacePath: guarded.workspacePath, workspaceRoot: guarded.workspaceRoot, sandboxMode, sandboxIsolation, probe: writeProbe.probe });
     const model = process.env.CATOS_CODEX_MODEL;
-    const renderedInstruction = buildCodexInstruction({ originalTask: input.originalTask, taskBrief: input.taskBrief });
+    const renderedInstruction = buildCodexInstruction({ originalTask: input.originalTask, taskBrief: input.taskBrief, executionPlan: input.executionPlan, currentStep: input.currentStep, dependencyResults: input.dependencyResults, stepStatuses: input.stepStatuses });
     const runtimeResult = await this.codexRuntimeRunner({
       env: runtime.env,
       cwd: guarded.workspacePath,

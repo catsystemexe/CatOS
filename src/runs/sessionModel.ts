@@ -687,3 +687,56 @@ export async function recordCommitEvent(
     metadata,
   });
 }
+
+export async function createPlannedSession(input: {
+  runDir: string;
+  runId: string;
+  goal: string;
+  branch: string;
+  workspacePath?: string;
+  git?: SessionGitContext;
+  steps: Array<{ id: string; sequence: number; title: string; instruction: string }>;
+  now?: Date;
+}): Promise<{ session: Session; steps: Step[] }> {
+  if (input.steps.length === 0) throw new Error("Cannot create planned session without steps.");
+  const createdAt = nowIso(input.now);
+  const steps: Step[] = input.steps.map((planned) => ({
+    schemaVersion: 1,
+    stepId: planned.id,
+    order: planned.sequence,
+    title: planned.title,
+    request: planned.instruction,
+    status: "open",
+    createdAt,
+    attempts: [],
+    decisionIds: [],
+  }));
+  const ordered = [...steps].sort((a, b) => a.order - b.order);
+  const session: Session = {
+    schemaVersion: 1,
+    sessionId: input.runId,
+    runId: input.runId,
+    goal: input.goal,
+    status: "active",
+    createdAt,
+    updatedAt: createdAt,
+    branch: input.branch,
+    workspacePath: input.workspacePath,
+    git: input.git,
+    steps: ordered.map((step) => step.stepId),
+    activeStepId: ordered[0]?.stepId,
+  };
+  await writeJson(path.join(input.runDir, "session.json"), session);
+  for (const step of ordered) {
+    await writeJson(path.join(stepDir(input.runDir, step), "step.json"), step);
+    await writeFile(path.join(stepDir(input.runDir, step), "request.md"), `${step.request}\n`, "utf8");
+    await appendTimelineEvent(input.runDir, { type: "step.created", sessionId: session.sessionId, stepId: step.stepId, metadata: { order: step.order, title: step.title } }, createdAt);
+  }
+  await appendTimelineEvent(input.runDir, { type: "session.created", sessionId: session.sessionId, metadata: { runId: input.runId, branch: input.branch, baseBranch: input.git?.baseBranch, baseCommit: input.git?.baseCommit, runBranch: input.git?.runBranch, prTargetBranch: input.git?.prTargetBranch } }, createdAt);
+  return { session, steps: ordered };
+}
+
+export async function activateStep(runDir: string, stepId: string): Promise<void> {
+  const session = await loadSession(runDir);
+  await persistSession(runDir, { ...session, activeStepId: stepId, status: "active" });
+}

@@ -33,6 +33,8 @@ export type TimelineEvent = {
   startedAt?: string;
   completedAt?: string;
   durationMs?: number;
+  stepSequence?: number;
+  stepTitle?: string;
   report?: {
     label: string;
     path: string;
@@ -288,6 +290,7 @@ function reviewStatus(verdict?: string): TimelineStatus {
   if (verdict === "ACCEPT") return "accepted";
   if (verdict === "REWORK") return "rework";
   if (verdict === "HUMAN_REQUIRED") return "human_required";
+  if (verdict === "STOP") return "stopped";
   if (verdict) return "failed";
   return "running";
 }
@@ -348,11 +351,12 @@ export async function buildUiTimeline(
     .filter((x): x is { file: string; attempt: Attempt } => !!x.attempt)
     .sort(
       (a, b) =>
-        a.attempt.order - b.attempt.order || a.file.localeCompare(b.file),
+        Date.parse(a.attempt.startedAt) - Date.parse(b.attempt.startedAt) || a.file.localeCompare(b.file),
     );
   const rows: UiTimelineRow[] = [];
   for (const { file, attempt } of parsed) {
     const dir = path.dirname(file);
+    const stepJson = await readJson<{ order?: number; title?: string }>(path.join(path.dirname(path.dirname(dir)), "step.json"));
     const codingArtifact = await firstExisting(runDir, dir, [attempt.artifacts.codingResultPath, "coding-result.json"]);
     const validationArtifact = await firstExisting(runDir, dir, [attempt.artifacts.validationReportPath, "validation-report.json"]);
     const coding = await firstExisting(runDir, dir, reportCandidates("coding", codingArtifact));
@@ -377,7 +381,9 @@ export async function buildUiTimeline(
         actor: actorForPhase(spec.phase),
         attempt: attempt.order,
         name: rowName(spec.phase),
-        label: phaseLabel(spec.phase, attempt.order),
+        label: `${phaseLabel(spec.phase, attempt.order)}${stepJson?.title ? ` — ${stepJson.title}` : ""}`,
+        stepSequence: stepJson?.order,
+        stepTitle: stepJson?.title,
         status: spec.status,
         startedAt: spec.startedAt,
         completedAt: spec.completedAt,
