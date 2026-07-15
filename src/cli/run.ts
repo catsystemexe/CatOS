@@ -6,7 +6,7 @@ import { mkdir, stat, writeFile } from "node:fs/promises";
 import { createRun } from "../runs/createRun.js";
 import { CodexSdkWorker, buildCodexInstruction, buildReworkCodexInstruction, sha256Text, writeCodingArtifacts, type CodingWorker, normalizeWorkBranchName, buildIsolatedWorkspacePath, type CodingResult } from "../codingWorker.js";
 import { ShellValidationRunner, buildValidationCommands, writeValidationReport, type ValidationRunner } from "../validationRunner.js";
-import { reviewChange, writeReviewReport, type ReviewerProvider } from "../agents/reviewer.js";
+import { reviewChange, safeReviewCodingResult, writeReviewReport, type ReviewerProvider } from "../agents/reviewer.js";
 import { resolveWorkspaceRoot } from "../workspaceRoot.js";
 import { buildReworkPackage, hasRepeatedBlockingFinding, writeFinalResult, writeReworkPackage } from "../reworkLoop.js";
 import type { FinalResult } from "../schemas/finalResult.js";
@@ -207,14 +207,7 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
   let reviewReport = await reviewChange({
     taskInput: run.input,
     taskBrief: analysis.taskBrief,
-    codingResult: {
-      threadId: codingResult.threadId,
-      finalResponse: codingResult.finalResponse,
-      workspacePath: codingResult.workspacePath,
-      changedFiles: codingResult.changedFiles,
-      sandboxMode: codingResult.sandboxMode,
-      sandboxIsolation: codingResult.sandboxIsolation,
-    },
+    codingResult: safeReviewCodingResult(codingResult),
     workspaceDiff: codingResult.diff,
     workspaceStatus: codingResult.status,
     validationReport,
@@ -318,14 +311,7 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
     reviewReport = await reviewChange({
       taskInput: run.input,
       taskBrief: analysis.taskBrief,
-      codingResult: {
-        threadId: codingResult.threadId,
-        finalResponse: codingResult.finalResponse,
-        workspacePath: codingResult.workspacePath,
-        changedFiles: codingResult.changedFiles,
-        sandboxMode: codingResult.sandboxMode,
-        sandboxIsolation: codingResult.sandboxIsolation,
-      },
+      codingResult: safeReviewCodingResult(codingResult),
       workspaceDiff: codingResult.diff,
       workspaceStatus: codingResult.status,
       validationReport,

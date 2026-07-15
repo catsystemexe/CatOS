@@ -3,6 +3,7 @@ import path from "node:path";
 
 import {
   reviewChange,
+  safeReviewCodingResult,
   writeReviewReport,
   type ReviewerProvider,
 } from "../agents/reviewer.js";
@@ -353,7 +354,7 @@ export async function runStepCommand(
           {
             taskInput,
             taskBrief,
-            codingResult,
+            codingResult: safeReviewCodingResult(codingResult),
             workspaceDiff: codingResult.diff,
             workspaceStatus: codingResult.status,
             validationReport,

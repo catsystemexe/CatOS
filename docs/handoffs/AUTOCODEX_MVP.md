@@ -227,6 +227,31 @@ A no-op placeholder command must be reported as SKIPPED, never PASS. When no rep
 
 Validation must distinguish repository checks from task acceptance. Generic repository validation does not prove the requested user output exists.
 
+
+## 10. Review structured evidence contract
+
+Review receives a safe structured Coding result subset directly from the coordinator, including `codingResult.diffCheck` when the coordinator produced it. Review must not reconstruct a partial Coding result that drops `diffCheck.status`, `command`, `exitCode`, `stdout`, `stderr`, `durationMs`, or `limitation`.
+
+Evidence precedence for Review decisions is:
+
+1. Structured coordinator evidence, including `codingResult.diffCheck`, the coordinator changed-file list, and workspace/runtime boundary metadata where applicable.
+2. Validation evidence, including `validation-report.json`, configured command results, and task-output checks.
+3. Workspace evidence, including `workspace.diff`, `workspace-status.txt`, and actual changed files.
+4. Coding natural-language claims from `codingResult.finalResponse`.
+
+Natural-language claims must never override contradictory structured evidence. A Validation status of `SKIPPED` does not erase an independent coordinator `diffCheck` result. A structured coordinator `PASS` may satisfy a `git diff --check` criterion even when that command is not duplicated as a configured Validation script.
+
+Diff-check normalization for Review is deterministic:
+
+- `PASS`: normalized to `SATISFIED` for semantically equivalent `git diff --check passes` criteria when the command ran, exit code is `0`, and no contradictory structured evidence exists.
+- `FAIL`: normalized to `NOT_SATISFIED`; non-zero exit output is evidence and is blocking when the task requires a clean diff.
+- `BLOCKED`: normalized to `UNCERTAIN`; success was not established and must never be represented as `SATISFIED`.
+- missing legacy evidence: normalized to `UNCERTAIN`; Review must not invent `PASS`.
+
+After the model returns a Review report, a narrow deterministic reconciliation may correct only diff-check acceptance criteria that contradict authoritative structured diff-check evidence without citing conflicting structured evidence. Reconciliation runs after provider output is parsed, before `review-report.json` is persisted, and before Markdown report generation. It may change a false `UNCERTAIN`/`NOT_SATISFIED` diff-check criterion to `SATISFIED` for coordinator `PASS`, or change a false `SATISFIED` criterion to `NOT_SATISFIED` and add a blocking finding for coordinator `FAIL`. It must not force `BLOCKED` or missing evidence to `SATISFIED`, rewrite unrelated criteria, or automatically accept an otherwise rework-required change solely because diff-check passed.
+
+`review-report.json` and generated Review Markdown must agree about the corrected Review result. Markdown must not add a post-hoc structured diff-check line that contradicts the persisted model/reconciled criterion. Limitations such as `git diff --check does not inspect untracked file content` remain visible: they do not invalidate the command-execution criterion when the command passed, but they also do not prove exact untracked file contents. Exact file-content requirements must be evaluated from workspace diff, file artifacts, or other evidence.
+
 ## 10. REVIEW step
 
 Purpose: compare the task acceptance criteria with actual workspace evidence.

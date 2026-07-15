@@ -540,6 +540,40 @@ test("CODEX report renders structured diff-check result", async () => {
   expect(md).toContain("- diff-check result: PASS");
 });
 
+
+test("Review JSON, Markdown, and FINAL report agree after diff-check reconciliation", async () => {
+  const f = await fixture();
+  await writeBase(f, "ACCEPT", "SKIPPED");
+  const coding = JSON.parse(await readFile(path.join(f.attemptDir, "coding-result.json"), "utf8"));
+  coding.diffCheck = {
+    command: "git diff --check",
+    exitCode: 0,
+    stdout: "",
+    stderr: "",
+    durationMs: 12,
+    status: "PASS",
+    limitation: "git diff --check does not inspect untracked file content.",
+  };
+  await writeFile(path.join(f.attemptDir, "coding-result.json"), JSON.stringify(coding));
+  await writeFile(path.join(f.attemptDir, "review-report.json"), JSON.stringify({
+    schemaVersion: 1,
+    verdict: "ACCEPT",
+    summary: "Structured coordinator diff-check evidence accepted.",
+    reviewedAcceptanceCriteria: [{ criterion: "git diff --check passes", status: "SATISFIED", evidence: "Coordinator diffCheck status PASS, command git diff --check, exit code 0." }],
+    blockingFindings: [],
+    warnings: [],
+  }));
+  await writeSessionReport(f.runDir);
+  const reviewJson = await readFile(path.join(f.attemptDir, "review-report.json"), "utf8");
+  const reviewMd = await readFile(path.join(f.attemptDir, "review-report.md"), "utf8");
+  const finalMd = await readFile(path.join(f.runDir, "FINAL_REPORT.md"), "utf8");
+  expect(reviewJson).toContain('"status":"SATISFIED"');
+  expect(reviewMd).toContain("SATISFIED: git diff --check passes");
+  expect(reviewJson).not.toContain("UNCERTAIN");
+  expect(reviewMd).not.toContain("UNCERTAIN: git diff --check passes");
+  expect(finalMd).not.toContain("UNCERTAIN: git diff --check passes");
+});
+
 test("validation status consistency preserves FAIL, SKIPPED, and FINAL timeline inheritance", async () => {
   const failBlocked = await fixture();
   await writeBase(failBlocked, "REWORK", "FAIL");
