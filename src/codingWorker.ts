@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
+import { writeCodingAttemptReport } from "./finalExport.js";
 
 const require = createRequire(import.meta.url);
 
@@ -925,5 +926,6 @@ export async function writeCodingArtifacts(runDir: string, taskBrief: unknown, r
   }, null, 2)}\n`, "utf8");
   await writeFile(diffPath, result.diff, "utf8");
   await writeFile(statusPath, result.status, "utf8");
+  await writeCodingAttemptReport(runDir, { coding: result, diff: result.diff, wsStatus: result.status });
   return { codingResultPath, diffPath, statusPath, taskBriefPath };
 }

@@ -319,9 +319,9 @@ function rowName(phase: TimelinePhase): UiTimelineRow["name"] {
   return phase === "coding" ? "CODEX" : phase === "validation" ? "VALIDATION" : phase === "review" ? "REVIEW" : "FINAL";
 }
 function reportCandidates(phase: TimelinePhase, artifact: string | undefined): Array<string | undefined> {
-  if (phase === "coding") return [artifact?.replace(/coding-result\.json$/, "coding-report.md"), "coding-report.md", artifact, "coding-result.json"];
-  if (phase === "validation") return [artifact?.replace(/validation-report\.json$/, "validation-report.md"), "validation-report.md", artifact, "validation-report.json"];
-  if (phase === "review") return [artifact?.replace(/review-report\.json$/, "review-report.md"), "review-report.md", artifact, "review-report.json", "review-package.md"];
+  if (phase === "coding") return [artifact?.replace(/coding-result\.json$/, "coding-report.md"), "coding-report.md", "coding-report-error.md", artifact, "coding-result.json"];
+  if (phase === "validation") return [artifact?.replace(/validation-report\.json$/, "validation-report.md"), "validation-report.md", "validation-report-error.md", artifact, "validation-report.json"];
+  if (phase === "review") return [artifact?.replace(/review-report\.json$/, "review-report.md"), "review-report.md", "review-report-error.md", artifact, "review-report.json", "review-package.md"];
   return [artifact];
 }
 function actorForPhase(phase: TimelinePhase): TimelineActor {

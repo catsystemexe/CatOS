@@ -2,6 +2,7 @@ import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { writeValidationAttemptReport } from "./finalExport.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -271,5 +272,6 @@ export async function writeValidationReport(runDir: string, report: ValidationRe
   await mkdir(runDir, { recursive: true });
   const reportPath = path.join(runDir, "validation-report.json");
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  await writeValidationAttemptReport(runDir, { validation: report });
   return reportPath;
 }
