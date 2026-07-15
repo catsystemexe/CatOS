@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const reviewVerdictSchema = z.enum(["ACCEPT", "REWORK", "HUMAN_REQUIRED"]);
+export const reviewVerdictSchema = z.enum(["ACCEPT", "REWORK", "HUMAN_REQUIRED", "STOP"]);
 
 export const reviewReportSchema = z.object({
   schemaVersion: z.literal(1),

@@ -8,6 +8,7 @@ import type { WorkspaceDiffCheck } from "../gitWorkspaceState.js";
 import type { ValidationReport } from "../validationRunner.js";
 import type { ProjectConfig } from "../config/projectConfigSchema.js";
 import type { ReworkPackage } from "../schemas/reworkPackage.js";
+import type { ExecutionPlan, PlannedStep, StepResult } from "../executionPlan.js";
 
 export const DEFAULT_REVIEW_PACKAGE_MAX_BYTES = 512_000;
 
@@ -41,6 +42,10 @@ export type ReviewerInput = {
     diffCheck: NormalizedDiffCheckEvidence;
     evidencePrecedence: string[];
   };
+  executionPlan?: ExecutionPlan;
+  currentStep?: PlannedStep;
+  acceptedDependencyResults?: StepResult[];
+  stepReviewQuestion?: string;
   reworkContext?: {
     reworkPackage: ReworkPackage;
     previousBlockingFindings: ReworkPackage["blockingFindings"];
@@ -281,7 +286,7 @@ export function buildReviewPrompt(input: ReviewerInput): string {
   const stdout = d.stdout.trim() ? d.stdout : "empty";
   const stderr = d.stderr.trim() ? d.stderr : "empty";
   return [
-    "Review this CatOS change package.",
+    input.currentStep ? "Review this CatOS Planned Step package." : "Review this CatOS change package.",
     "",
     "# Structured coordinator evidence",
     "",
@@ -313,6 +318,7 @@ export function buildReviewPrompt(input: ReviewerInput): string {
     "A structured PASS may satisfy a git diff --check criterion even when the command is not duplicated as a configured Validation script.",
     "A Validation status of SKIPPED must not invalidate an independent coordinator diff-check PASS.",
     "",
+    ...(input.currentStep ? ["# Step-level Review contract", "", "Has the current Planned Step been completed sufficiently and correctly to allow dependent Steps to begin?", "Do not require future Planned Step criteria during this current Step Review.", "Do not create new Planned Steps. Rework instructions must remain scoped to the current Planned Step.", "Use ACCEPT_STEP semantics by returning ACCEPT, REWORK_STEP semantics by returning REWORK, or HUMAN_REQUIRED/STOP when needed.", ""] : []),
     "# Full review package",
     "",
     redactPromptSecrets(JSON.stringify(reviewInput, null, 2)),
@@ -345,7 +351,7 @@ export function createOpenAIReviewerProvider(options: { apiKey?: string; model?:
           "You are the CatOS Reviewer. Qualitatively review the submitted code change after deterministic validation.",
           "You have no shell access, no filesystem tools, and no ability to modify the repository. Use only the provided review package.",
           "Return only structured output matching the ReviewReport schema.",
-          "Review verdicts are ACCEPT, REWORK, or HUMAN_REQUIRED. Never return FAIL; FAIL is a Validation Runner status, not a review verdict.",
+          "Review verdicts are ACCEPT, REWORK, HUMAN_REQUIRED, or STOP. ACCEPT maps to ACCEPT_STEP for the current Planned Step; REWORK maps to REWORK_STEP in the same Planned Step. Never return FAIL; FAIL is a Validation Runner status, not a review verdict.",
           "Validation status PASS/FAIL/BLOCKED is evidence, but the final review must also consider the task, acceptance criteria, diff, workspace status, and validation report.",
           "If validation status is FAIL or BLOCKED, ACCEPT is forbidden. Use REWORK for clear implementation or validation failures, or HUMAN_REQUIRED when a human decision/environment intervention is needed.",
           "When reviewing scope, compare TaskBrief, prior validation failure evidence when this is a rework, the current validation report, the current diff, and explicit nonGoals. Do not compare only changed file names against the literal original task text.",

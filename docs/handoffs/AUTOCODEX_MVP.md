@@ -393,3 +393,67 @@ Create `docs/AUTOCODEX_E2E_TEST.md` with exact requested content and verify:
 - No automatic Git publication.
 
 Previous design note: earlier documents described Project/Profile selectors, local repository discovery, manual repository paths, a separate OUTPUT panel, session-report wording, and a runtime GPT handoff based only on the final Codex response. Those are not the current MVP contract.
+
+## 11. Explicit multi-step execution contract
+
+AutoCodex may now receive an explicit `ExecutionPlan` supplied by a caller through structured JSON. The JSON contract is authoritative for orchestration and is separate from `TaskBrief`, which remains additive guidance for the currently executing Step.
+
+Required contract:
+
+```ts
+type ExecutionPlan = {
+  schemaVersion: 1;
+  objective: string;
+  originalTask: string;
+  steps: PlannedStep[];
+};
+
+type PlannedStep = {
+  id: string;
+  sequence: number;
+  title: string;
+  instruction: string;
+  acceptanceCriteria: string[];
+  expectedArtifacts: string[];
+  validationPolicy: "required" | "optional" | "not-applicable";
+  dependsOn: string[];
+  constraints?: string[];
+};
+```
+
+The Task Analyst may validate and normalize an explicitly supplied plan, but it must not merge, reorder, replace, silently remove, or substantially invent explicit Steps. Automatic free-form task decomposition is outside the MVP contract.
+
+Step and Attempt are distinct concepts:
+
+- an ExecutionPlan contains ordered planned Steps,
+- a Step is a user/caller-defined unit of work,
+- an Attempt is one execution attempt for exactly one Step,
+- a Review rework verdict creates another Attempt inside the same Step rather than a new Planned Step.
+
+Before the first Step starts, the coordinator writes immutable run-level plan artifacts:
+
+- `execution-plan.json` as the authoritative normalized contract,
+- `EXECUTION_PLAN.md` as the human-readable plan summary.
+
+Each Step receives a stable directory containing `step.json`, `step-state.json`, append-only attempt directories, and, after acceptance, `step-result.json` plus `STEP_REPORT.md`. Step state is explicit and is not inferred only from the latest Attempt directory.
+
+Steps execute sequentially in deterministic plan order. A Step may start only after all declared dependencies have accepted `step-result.json` boundaries. The existing Coding → Validation → Review attempt loop is reused within each Step. Reviewer progression gates use Step-level semantics:
+
+- `ACCEPT` maps to `ACCEPT_STEP`, allowing dependent Steps to begin,
+- `REWORK` maps to `REWORK_STEP`, creating another Attempt in the current Step,
+- `HUMAN_REQUIRED` stops before dependent Steps,
+- `STOP` terminates the run without creating additional executable Steps.
+
+Every multi-step Coding prompt includes the original user task verbatim, a complete execution-plan status summary, the current Step identity/title/instruction/acceptance criteria, expected artifacts, validation policy, constraints, approved dependency results, and an explicit rule to complete only the current Planned Step without pre-empting future Steps.
+
+Accepted dependency context is passed only through accepted `step-result.json` records and approved artifacts referenced by those records. Failed Attempt output and unaccepted Review drafts are not dependency truth.
+
+Validation policy is per Step:
+
+- `required` runs configured validation as a blocking evidence source,
+- `optional` runs applicable deterministic checks with non-required commands where possible,
+- `not-applicable` omits the Validation timeline event and proceeds from Coding to Review.
+
+Final is plan-level aggregation. It is generated only after every planned Step is accepted or after a terminal human/failure/stop state. Final summarizes every Step, accepted Attempt, rework Attempt history, Step reports, validation/review summaries, changed files, and Human Gate status. The Human Gate remains after Final; the runtime still must not automatically commit, push, open a PR, merge, or publish Git changes.
+
+Single-step tasks remain compatible by normalizing ordinary task input to a one-Step ExecutionPlan and running the same plan executor.

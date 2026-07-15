@@ -2,403 +2,76 @@ import { analyzeTaskBrief, writeTaskBrief, type TaskAnalystProvider } from "../a
 import { loadProjectConfig } from "../config/loadConfig.js";
 import { resolveRepositoryRunConfig } from "../repositoryRunConfig.js";
 import { validateManualRepository } from "../repositoryDiscovery.js";
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createRun } from "../runs/createRun.js";
 import { CodexSdkWorker, buildCodexInstruction, buildReworkCodexInstruction, sha256Text, writeCodingArtifacts, type CodingWorker, normalizeWorkBranchName, buildIsolatedWorkspacePath, type CodingResult } from "../codingWorker.js";
-import { ShellValidationRunner, buildValidationCommands, writeValidationReport, type ValidationRunner } from "../validationRunner.js";
+import { ShellValidationRunner, buildValidationCommands, writeValidationReport, type ValidationRunner, type ValidationReport } from "../validationRunner.js";
 import { reviewChange, safeReviewCodingResult, writeReviewReport, type ReviewerProvider } from "../agents/reviewer.js";
 import { resolveWorkspaceRoot } from "../workspaceRoot.js";
 import { buildReworkPackage, hasRepeatedBlockingFinding, writeFinalResult, writeReworkPackage } from "../reworkLoop.js";
 import type { FinalResult } from "../schemas/finalResult.js";
+import type { ReviewReport } from "../schemas/reviewReport.js";
 import path from "node:path";
-import { artifactRefs, attemptDir as sessionAttemptDir, completeAttempt, createSession, startAttempt, appendTimelineEvent } from "../runs/sessionModel.js";
+import { artifactRefs, attemptDir as sessionAttemptDir, completeAttempt, createPlannedSession, startAttempt, appendTimelineEvent, activateStep, type Step } from "../runs/sessionModel.js";
 import { assertWorkspaceBranch, resolveGitContext } from "../gitSession.js";
 import { collectWorkspaceDiffCheck } from "../gitWorkspaceState.js";
+import { writeFinalReport } from "../finalExport.js";
+import { mapReviewVerdict, normalizeExecutionPlan, persistExecutionPlan, readExecutionPlanFile, singleStepExecutionPlan, sanitizeStepSlug, type ExecutionPlan, type PlannedStep, type StepResult, type StepState } from "../executionPlan.js";
 
-type RunCliOptions = {
-  cwd?: string;
-  runsDir?: string;
-  taskAnalystProvider?: TaskAnalystProvider;
-  codingWorker?: CodingWorker;
-  validationRunner?: ValidationRunner;
-  reviewerProvider?: ReviewerProvider;
-};
-
-function readOption(args: string[], name: string): string | undefined {
-  const index = args.indexOf(name);
-  if (index === -1) return undefined;
-  return args[index + 1];
-}
-
-
-async function writeCodingInstructionAudit(input: { runDir: string; artifactDir: string; sessionAttemptDir?: string; instruction: string; originalTask: string; attemptNumber: number }): Promise<Pick<CodingResult, "instructionArtifactPath" | "originalTaskLength" | "originalTaskSha256" | "renderedInstructionSha256" | "attemptNumber">> {
-  await mkdir(input.artifactDir, { recursive: true });
-  const artifactPath = path.join(input.artifactDir, "coding-instruction.md");
-  await writeFile(artifactPath, input.instruction, "utf8");
-  if (input.sessionAttemptDir && path.resolve(input.sessionAttemptDir) !== path.resolve(input.artifactDir)) {
-    await mkdir(input.sessionAttemptDir, { recursive: true });
-    await writeFile(path.join(input.sessionAttemptDir, "coding-instruction.md"), input.instruction, "utf8");
-  }
-  return {
-    instructionArtifactPath: path.relative(input.runDir, artifactPath),
-    originalTaskLength: Buffer.byteLength(input.originalTask, "utf8"),
-    originalTaskSha256: sha256Text(input.originalTask),
-    renderedInstructionSha256: sha256Text(input.instruction),
-    attemptNumber: input.attemptNumber,
-  };
-}
-
-async function isTracked(workspacePath: string, file: string): Promise<boolean> {
-  const { execFile } = await import("node:child_process");
-  const { promisify } = await import("node:util");
-  const execFileAsync = promisify(execFile);
-  try { await execFileAsync("git", ["-C", workspacePath, "ls-files", "--error-unmatch", "--", file]); return true; } catch { return false; }
-}
+export type RunCliOptions = { cwd?: string; runsDir?: string; taskAnalystProvider?: TaskAnalystProvider; codingWorker?: CodingWorker; validationRunner?: ValidationRunner; reviewerProvider?: ReviewerProvider; executionPlan?: ExecutionPlan; };
+function readOption(args: string[], name: string): string | undefined { const index = args.indexOf(name); return index === -1 ? undefined : args[index + 1]; }
+async function readJson<T>(file: string): Promise<T | undefined> { try { return JSON.parse(await readFile(file, "utf8")) as T; } catch { return undefined; } }
+async function writeJson(file: string, value: unknown): Promise<void> { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8"); }
+function stepDir(runDir: string, step: PlannedStep): string { return path.join(runDir, "steps", sanitizeStepSlug(step)); }
+function now() { return new Date().toISOString(); }
+async function writeCodingInstructionAudit(input: { runDir: string; artifactDir: string; sessionAttemptDir?: string; instruction: string; originalTask: string; attemptNumber: number }): Promise<Pick<CodingResult, "instructionArtifactPath" | "originalTaskLength" | "originalTaskSha256" | "renderedInstructionSha256" | "attemptNumber">> { await mkdir(input.artifactDir, { recursive: true }); const artifactPath = path.join(input.artifactDir, "coding-instruction.md"); await writeFile(artifactPath, input.instruction, "utf8"); if (input.sessionAttemptDir && path.resolve(input.sessionAttemptDir) !== path.resolve(input.artifactDir)) { await mkdir(input.sessionAttemptDir, { recursive: true }); await writeFile(path.join(input.sessionAttemptDir, "coding-instruction.md"), input.instruction, "utf8"); } return { instructionArtifactPath: path.relative(input.runDir, artifactPath), originalTaskLength: Buffer.byteLength(input.originalTask, "utf8"), originalTaskSha256: sha256Text(input.originalTask), renderedInstructionSha256: sha256Text(input.instruction), attemptNumber: input.attemptNumber }; }
+async function isTracked(workspacePath: string, file: string): Promise<boolean> { const { execFile } = await import("node:child_process"); const { promisify } = await import("node:util"); try { await promisify(execFile)("git", ["-C", workspacePath, "ls-files", "--error-unmatch", "--", file]); return true; } catch { return false; } }
+function taskBriefForStep(base: any, step: PlannedStep) { return { ...base, codexInstruction: step.instruction, acceptanceCriteria: step.acceptanceCriteria, expectedFiles: step.expectedArtifacts, constraints: [...(base.constraints ?? []), ...(step.constraints ?? [])] }; }
+async function writeStepState(runDir: string, step: PlannedStep, state: StepState) { await writeJson(path.join(stepDir(runDir, step), "step-state.json"), state); }
+function initStepState(step: PlannedStep, accepted: Map<string, StepResult>): StepState { return { schemaVersion: 1, stepId: step.id, sequence: step.sequence, status: "PENDING", dependencies: Object.fromEntries(step.dependsOn.map((d) => [d, accepted.has(d) ? "ACCEPTED" : "PENDING"])) }; }
+function stepStatuses(plan: ExecutionPlan, states: Map<string, StepState>): Record<string, string> { return Object.fromEntries(plan.steps.map((s) => [s.id, states.get(s.id)?.status ?? "PENDING"])); }
+function dependencyResults(step: PlannedStep, accepted: Map<string, StepResult>): StepResult[] { return step.dependsOn.map((id) => accepted.get(id)).filter((x): x is StepResult => Boolean(x)); }
+function validationCommandsForPolicy(policy: PlannedStep["validationPolicy"], commands: ReturnType<typeof buildValidationCommands>) { if (policy === "not-applicable") return undefined; if (policy === "optional") return commands.map((c) => ({ ...c, required: false })); return commands; }
+function emptyValidationReport(workspacePath: string, status: ValidationReport["status"] = "SKIPPED"): ValidationReport { const t = now(); return { schemaVersion: 1, status, workspacePath, startedAt: t, finishedAt: t, results: [] }; }
+async function createStepResult(input: { runDir: string; step: PlannedStep; attempt: number; codingResult: CodingResult; validationReport?: ValidationReport; reviewReport: ReviewReport; validationReportPath?: string; reviewReportPath: string; attemptDir: string }): Promise<StepResult> { const acceptedAt = now(); const result: StepResult = { schemaVersion: 1, stepId: input.step.id, sequence: input.step.sequence, title: input.step.title, status: "ACCEPTED", acceptedAttempt: input.attempt, summary: input.reviewReport.summary, acceptedArtifacts: input.step.expectedArtifacts.filter((a) => !path.isAbsolute(a)), codingReportPath: path.relative(input.runDir, path.join(input.attemptDir, "coding-report.md")), ...(input.validationReportPath ? { validationReportPath: path.relative(input.runDir, input.validationReportPath) } : {}), reviewReportPath: path.relative(input.runDir, input.reviewReportPath), acceptedAt, evidence: { changedFiles: input.codingResult.changedFiles, diffCheckStatus: input.codingResult.diffCheck?.status } }; await writeJson(path.join(stepDir(input.runDir, input.step), "step-result.json"), result); const report = ["# Step Report", "", `## Step ${input.step.sequence}: ${input.step.title}`, "", `- status: ACCEPTED`, `- accepted attempt: ${input.attempt}`, `- completed: ${acceptedAt}`, "", "## Instruction", "", input.step.instruction, "", "## Acceptance criteria", ...input.step.acceptanceCriteria.map((c) => `- ${c}`), "", "## Dependency inputs", ...(input.step.dependsOn.length ? input.step.dependsOn.map((d) => `- ${d}`) : ["- none"]), "", "## Accepted artifacts", ...(result.acceptedArtifacts.length ? result.acceptedArtifacts.map((a) => `- ${a}`) : ["- none"]), "", "## Changed files", ...(input.codingResult.changedFiles.length ? input.codingResult.changedFiles.map((f) => `- ${f}`) : ["- none"]), "", "## Review decision", "", input.reviewReport.verdict, "", "## Summary", "", input.reviewReport.summary, ""].join("\n"); await writeFile(path.join(stepDir(input.runDir, input.step), "STEP_REPORT.md"), report, "utf8"); return result; }
 
 export async function runCommand(args: string[], options: RunCliOptions = {}): Promise<void> {
-  let projectId = readOption(args, "--project");
-  const repositoryPath = readOption(args, "--repo") ?? readOption(args, "--repository");
-  const goal = readOption(args, "--task");
-
-  if (!projectId && !repositoryPath) {
-    throw new Error("Chybí povinný parametr --project nebo --repo.");
-  }
-
-  if (!goal) {
-    throw new Error("Chybí povinný parametr --task.");
-  }
-
-  let loaded: Awaited<ReturnType<typeof loadProjectConfig>>;
-  let configSource: string = "project-config";
-  let configPath: string;
-  if (repositoryPath) {
-    const repo = (await validateManualRepository(repositoryPath)).path;
-    const resolved = await resolveRepositoryRunConfig(repo, options.cwd);
-    loaded = { config: resolved.config, configPath: resolved.configPath, absoluteConfigPath: resolved.configPath, absoluteRepoPath: repo };
-    configSource = resolved.configSource;
-    projectId = projectId ?? loaded.config.project.id;
-    configPath = resolved.configPath;
-  } else {
-    configPath = `projects/${projectId}.yaml`;
-    loaded = await loadProjectConfig(configPath, options.cwd);
-    if (loaded.config.project.id !== projectId) {
-      throw new Error(`ID projektu v konfiguraci (${loaded.config.project.id}) neodpovídá parametru --project (${projectId}).`);
+  let projectId = readOption(args, "--project"); const repositoryPath = readOption(args, "--repo") ?? readOption(args, "--repository"); const goal = readOption(args, "--task"); const planFile = readOption(args, "--execution-plan");
+  if (!projectId && !repositoryPath) throw new Error("Chybí povinný parametr --project nebo --repo."); if (!goal && !planFile && !options.executionPlan) throw new Error("Chybí povinný parametr --task nebo --execution-plan.");
+  let loaded: Awaited<ReturnType<typeof loadProjectConfig>>; let configSource = "project-config"; let configPath: string;
+  if (repositoryPath) { const repo = (await validateManualRepository(repositoryPath)).path; const resolved = await resolveRepositoryRunConfig(repo, options.cwd); loaded = { config: resolved.config, configPath: resolved.configPath, absoluteConfigPath: resolved.configPath, absoluteRepoPath: repo }; configSource = resolved.configSource; projectId = projectId ?? loaded.config.project.id; configPath = resolved.configPath; } else { configPath = `projects/${projectId}.yaml`; loaded = await loadProjectConfig(configPath, options.cwd); if (loaded.config.project.id !== projectId) throw new Error(`ID projektu v konfiguraci (${loaded.config.project.id}) neodpovídá parametru --project (${projectId}).`); }
+  const plan = options.executionPlan ? normalizeExecutionPlan(options.executionPlan, goal) : planFile ? await readExecutionPlanFile(planFile, goal) : singleStepExecutionPlan(goal!); const originalTask = plan.originalTask;
+  const baseBranch = readOption(args, "--base-branch") ?? loaded.config.project.baseBranch; if (!baseBranch) throw new Error("Missing base branch: pass --base-branch or set project.baseBranch in config."); const prTargetBranch = readOption(args, "--pr-target") ?? loaded.config.git.prTargetBranch ?? baseBranch; const requestedSandboxMode = (readOption(args, "--sandbox-mode") as any) ?? loaded.config.codex.sandboxMode; const workspaceRoot = resolveWorkspaceRoot(loaded.config.execution.workspaceRoot);
+  const run = await createRun(projectId!, originalTask, configPath, { runsDir: options.runsDir }); await writeFile(run.inputPath, `${JSON.stringify({ ...run.input, goal: originalTask, task: originalTask, repositoryPath: loaded.absoluteRepoPath, baseBranch, prTargetBranch, configSource, executionPlan: plan }, null, 2)}\n`, "utf8"); (run.input as any).repositoryPath = loaded.absoluteRepoPath; (run.input as any).goal = originalTask; (run.input as any).executionPlan = plan;
+  await persistExecutionPlan(run.runDir, plan);
+  const runBranch = normalizeWorkBranchName(run.runId); const workspacePath = await buildIsolatedWorkspacePath({ workspaceRoot, runId: run.runId, repositoryPath: loaded.absoluteRepoPath }); const git = await resolveGitContext({ projectId: projectId!, repositoryPath: loaded.absoluteRepoPath, baseBranch, prTargetBranch, runBranch, workspacePath, remoteName: loaded.config.git.remoteName });
+  const { steps: sessionSteps } = await createPlannedSession({ runDir: run.runDir, runId: run.runId, goal: originalTask, branch: runBranch, workspacePath, git, steps: plan.steps.map((s) => ({ id: s.id, sequence: s.sequence, title: s.title, instruction: s.instruction })) }); await appendTimelineEvent(run.runDir, { type: "git.base_resolved", sessionId: run.runId, metadata: { baseBranch, baseCommit: git.baseCommit, runBranch, prTargetBranch } });
+  const analysis = await analyzeTaskBrief(originalTask, projectId!, { provider: options.taskAnalystProvider }); const taskBriefPath = await writeTaskBrief(run.runDir, analysis.taskBrief); const codingWorker = options.codingWorker ?? new CodexSdkWorker(); const validationRunner = options.validationRunner ?? new ShellValidationRunner(); const baseValidationCommands = buildValidationCommands(loaded.config.commands, loaded.config.validation); const maxReworkAttempts = loaded.config.workflow.maxReworkAttempts;
+  const accepted = new Map<string, StepResult>(); const states = new Map<string, StepState>(); let finalStatus: FinalResult["status"] = "ACCEPTED"; let terminalError: FinalResult["error"] = null; let codingResult: CodingResult | undefined; let validationReport: ValidationReport | undefined; let reviewReport: ReviewReport | undefined; let reviewReportPath = "review-report.json"; let validationReportPath: string | undefined; let totalAttempts = 0; let reworkAttempts = 0;
+  for (const plannedStep of plan.steps) {
+    const sessionStep = sessionSteps.find((s) => s.stepId === plannedStep.id) as Step; await activateStep(run.runDir, plannedStep.id); let state = initStepState(plannedStep, accepted); states.set(plannedStep.id, state); await writeJson(path.join(stepDir(run.runDir, plannedStep), "step.json"), plannedStep); await writeStepState(run.runDir, plannedStep, state);
+    if (plannedStep.dependsOn.some((d) => !accepted.has(d))) { state = { ...state, status: "FAILED", finishedAt: now(), error: "Unresolved dependency." }; await writeStepState(run.runDir, plannedStep, state); finalStatus = "REWORK_LIMIT_REACHED"; terminalError = { code: "unresolved_dependency", message: `Step ${plannedStep.id} has unresolved dependencies.`, stepId: plannedStep.id }; break; }
+    state = { ...state, status: "RUNNING", startedAt: now(), dependencies: Object.fromEntries(plannedStep.dependsOn.map((d) => [d, "ACCEPTED"])) }; await writeStepState(run.runDir, plannedStep, state);
+    let stepAccepted = false; let previousReviewReport: ReviewReport | undefined; let previousValidationStatus: ValidationReport["status"] | undefined;
+    while (!stepAccepted) {
+      const attemptNumber = (state.activeAttempt ?? 0) + 1; state = { ...state, status: attemptNumber > 1 ? "REWORK" : "RUNNING", activeAttempt: attemptNumber }; await writeStepState(run.runDir, plannedStep, state); const brief = taskBriefForStep(analysis.taskBrief, plannedStep); const deps = dependencyResults(plannedStep, accepted); const statuses = stepStatuses(plan, states); const instruction = attemptNumber === 1 ? buildCodexInstruction({ originalTask, taskBrief: brief, executionPlan: plan, currentStep: plannedStep, dependencyResults: deps, stepStatuses: statuses }) : buildReworkCodexInstruction({ originalTask, taskBrief: brief, executionPlan: plan, currentStep: plannedStep, dependencyResults: deps, stepStatuses: statuses, reworkPackage: buildReworkPackage({ attempt: attemptNumber - 1, taskBrief: brief, reviewReport: reviewReport!, codingResult: codingResult!, validationReport: validationReport!, workspaceDiff: codingResult!.diff }), previousAttemptResult: codingResult?.finalResponse, reviewVerdict: reviewReport?.verdict });
+      const attempt = await startAttempt({ runDir: run.runDir, step: sessionStep, prompt: instruction, runtimeMode: requestedSandboxMode }); const attemptPath = sessionAttemptDir(run.runDir, sessionStep, attempt); const audit = await writeCodingInstructionAudit({ runDir: run.runDir, artifactDir: attemptPath, sessionAttemptDir: attemptPath, instruction, originalTask, attemptNumber }); totalAttempts++;
+      if (attemptNumber === 1) codingResult = await codingWorker.executeTask({ originalTask, taskBrief: brief, executionPlan: plan, currentStep: plannedStep, dependencyResults: deps, stepStatuses: statuses, repositoryPath: loaded.absoluteRepoPath, baseBranch, baseCommit: git.baseCommit, runBranch, workspacePath, runId: run.runId, workspaceRoot, sandboxMode: requestedSandboxMode, approvalPolicy: "never", attemptNumber }); else { await assertWorkspaceBranch(run.runDir); codingResult = await codingWorker.continueTask({ originalTask, taskBrief: brief, executionPlan: plan, currentStep: plannedStep, dependencyResults: deps, stepStatuses: statuses, threadId: codingResult!.threadId, workspacePath: codingResult!.workspacePath, workspaceRoot, reworkPackage: buildReworkPackage({ attempt: attemptNumber - 1, taskBrief: brief, reviewReport: reviewReport!, codingResult: codingResult!, validationReport: validationReport!, workspaceDiff: codingResult!.diff }), sandboxMode: requestedSandboxMode, approvalPolicy: "never", attemptNumber, previousAttemptResult: codingResult!.finalResponse, reviewVerdict: reviewReport!.verdict }); reworkAttempts++; }
+      await appendTimelineEvent(run.runDir, { type: "git.run_branch_created", sessionId: run.runId, metadata: { baseBranch, baseCommit: git.baseCommit, runBranch, prTargetBranch } }); codingResult.diffCheck = await collectWorkspaceDiffCheck(codingResult.workspacePath); Object.assign(codingResult, audit); await writeCodingArtifacts(attemptPath, brief, codingResult);
+      if (plan.steps.length === 1 && attemptNumber === 1) await writeCodingArtifacts(run.runDir, brief, codingResult);
+      const validationCommands = validationCommandsForPolicy(plannedStep.validationPolicy, baseValidationCommands); if (validationCommands) { validationReport = await validationRunner.run({ workspacePath: codingResult.workspacePath, commands: validationCommands }); validationReportPath = await writeValidationReport(attemptPath, validationReport); if (plan.steps.length === 1 && attemptNumber === 1) await writeValidationReport(run.runDir, validationReport); } else { validationReport = emptyValidationReport(codingResult.workspacePath); validationReportPath = undefined; }
+      await completeAttempt({ runDir: run.runDir, step: sessionStep, attempt, status: "succeeded", codexThreadId: codingResult.threadId, resultStatus: "completed", changedFiles: codingResult.changedFiles, validationSummary: validationReport.status, workspacePath: codingResult.workspacePath, artifacts: artifactRefs(run.runDir, { codingResultPath: path.join(attemptPath, "coding-result.json"), codingInstructionPath: path.join(attemptPath, "coding-instruction.md"), diffPath: path.join(attemptPath, "workspace.diff"), statusPath: path.join(attemptPath, "workspace-status.txt"), taskBriefPath: path.join(attemptPath, "task-brief.json"), validationReportPath }) });
+      reviewReport = await reviewChange({ taskInput: run.input, taskBrief: brief, codingResult: safeReviewCodingResult(codingResult), workspaceDiff: codingResult.diff, workspaceStatus: codingResult.status, validationReport, projectConstraints: { permissions: loaded.config.permissions, workflow: loaded.config.workflow, codex: { ...loaded.config.codex, sandboxMode: requestedSandboxMode } }, executionPlan: plan, currentStep: plannedStep, acceptedDependencyResults: deps, stepReviewQuestion: "Has the current Planned Step been completed sufficiently and correctly to allow dependent Steps to begin?", ...(attemptNumber > 1 ? { reworkContext: { reworkPackage: buildReworkPackage({ attempt: attemptNumber - 1, taskBrief: brief, reviewReport: previousReviewReport ?? reviewReport, codingResult, validationReport, workspaceDiff: codingResult.diff }), previousBlockingFindings: previousReviewReport?.blockingFindings ?? [], requiredChanges: previousReviewReport?.blockingFindings.map((f) => f.requiredChange) ?? [], reworkReason: previousReviewReport?.summary ?? "Step rework" } } : {}) } as any, { provider: options.reviewerProvider }); reviewReportPath = await writeReviewReport(attemptPath, reviewReport); if (plan.steps.length === 1 && attemptNumber === 1) await writeReviewReport(run.runDir, reviewReport); const stepVerdict = mapReviewVerdict(reviewReport.verdict); state = { ...state, lastReviewVerdict: stepVerdict }; await writeStepState(run.runDir, plannedStep, state);
+      if (stepVerdict === "ACCEPT_STEP") { const result = await createStepResult({ runDir: run.runDir, step: plannedStep, attempt: attemptNumber, codingResult, validationReport, reviewReport, validationReportPath, reviewReportPath, attemptDir: attemptPath }); accepted.set(plannedStep.id, result); state = { ...state, status: "ACCEPTED", acceptedAttempt: attemptNumber, finishedAt: now() }; await writeStepState(run.runDir, plannedStep, state); stepAccepted = true; break; }
+      if (stepVerdict === "HUMAN_REQUIRED") { state = { ...state, status: "HUMAN_REQUIRED", finishedAt: now(), error: reviewReport.summary }; await writeStepState(run.runDir, plannedStep, state); finalStatus = "HUMAN_REQUIRED"; terminalError = { code: "human_required", message: reviewReport.summary, stepId: plannedStep.id }; break; }
+      if (stepVerdict === "STOP") { state = { ...state, status: "STOPPED", finishedAt: now(), error: reviewReport.summary }; await writeStepState(run.runDir, plannedStep, state); finalStatus = "REWORK_LIMIT_REACHED"; terminalError = { code: "stopped", message: reviewReport.summary, stepId: plannedStep.id }; break; }
+      if (attemptNumber > maxReworkAttempts || (previousReviewReport && hasRepeatedBlockingFinding(previousReviewReport, reviewReport)) || (previousValidationStatus === "BLOCKED" && validationReport.status === "BLOCKED")) { state = { ...state, status: "FAILED", finishedAt: now(), error: reviewReport.summary }; await writeStepState(run.runDir, plannedStep, state); finalStatus = "REWORK_LIMIT_REACHED"; terminalError = { code: "attempt_exhaustion", message: reviewReport.summary, stepId: plannedStep.id }; break; }
+      previousReviewReport = reviewReport; previousValidationStatus = validationReport.status; await writeReworkPackage(path.join(attemptPath, "rework"), buildReworkPackage({ attempt: attemptNumber, taskBrief: brief, reviewReport, codingResult, validationReport, workspaceDiff: codingResult.diff }));
     }
+    if (!stepAccepted) break;
   }
-
-  const baseBranch = readOption(args, "--base-branch") ?? loaded.config.project.baseBranch;
-  if (!baseBranch) throw new Error("Missing base branch: pass --base-branch or set project.baseBranch in config.");
-  const prTargetBranch = readOption(args, "--pr-target") ?? loaded.config.git.prTargetBranch ?? baseBranch;
-  const requestedSandboxMode = (readOption(args, "--sandbox-mode") as any) ?? loaded.config.codex.sandboxMode;
-  const workspaceRoot = resolveWorkspaceRoot(loaded.config.execution.workspaceRoot);
-  const run = await createRun(projectId!, goal, configPath, { runsDir: options.runsDir });
-  await writeFile(run.inputPath, `${JSON.stringify({ ...run.input, repositoryPath: loaded.absoluteRepoPath, baseBranch, prTargetBranch, configSource }, null, 2)}\n`, "utf8");
-  (run.input as any).repositoryPath = loaded.absoluteRepoPath;
-  const runBranch = normalizeWorkBranchName(run.runId);
-  const workspacePath = await buildIsolatedWorkspacePath({ workspaceRoot, runId: run.runId, repositoryPath: loaded.absoluteRepoPath });
-  const git = await resolveGitContext({ projectId: projectId!, repositoryPath: loaded.absoluteRepoPath, baseBranch, prTargetBranch, runBranch, workspacePath, remoteName: loaded.config.git.remoteName });
-  const sessionState = await createSession({ runDir: run.runDir, runId: run.runId, goal, branch: runBranch, workspacePath, git, requestTitle: "Initial run", request: goal });
-  await appendTimelineEvent(run.runDir, { type: "git.base_resolved", sessionId: run.runId, metadata: { baseBranch, baseCommit: git.baseCommit, runBranch, prTargetBranch } });
-  const analysis = await analyzeTaskBrief(goal, projectId!, { provider: options.taskAnalystProvider });
-  const taskBriefPath = await writeTaskBrief(run.runDir, analysis.taskBrief);
-  const codingWorker = options.codingWorker ?? new CodexSdkWorker();
-  const validationRunner = options.validationRunner ?? new ShellValidationRunner();
-  const validationCommands = buildValidationCommands(loaded.config.commands, loaded.config.validation);
-  const maxReworkAttempts = loaded.config.workflow.maxReworkAttempts;
-
-  let currentStep = sessionState.step;
-  const initialInstruction = buildCodexInstruction({ originalTask: goal, taskBrief: analysis.taskBrief });
-  let currentAttempt = await startAttempt({ runDir: run.runDir, step: currentStep, prompt: initialInstruction, runtimeMode: requestedSandboxMode });
-  const initialInstructionMetadata = await writeCodingInstructionAudit({ runDir: run.runDir, artifactDir: run.runDir, sessionAttemptDir: sessionAttemptDir(run.runDir, currentStep, currentAttempt), instruction: initialInstruction, originalTask: goal, attemptNumber: currentAttempt.order });
-
-  let codingResult;
-  let codingArtifacts;
-  try {
-    codingResult = await codingWorker.executeTask({
-      originalTask: goal,
-      taskBrief: analysis.taskBrief,
-      repositoryPath: loaded.absoluteRepoPath,
-      baseBranch,
-      baseCommit: git.baseCommit,
-      runBranch,
-      workspacePath,
-      runId: run.runId,
-      workspaceRoot,
-      sandboxMode: requestedSandboxMode,
-      approvalPolicy: "never",
-      attemptNumber: currentAttempt.order,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    codingResult = {
-      threadId: "runtime-error",
-      finalResponse: message,
-      workspacePath,
-      changedFiles: [],
-      diff: "",
-      status: "",
-      sandboxMode: requestedSandboxMode,
-      sandboxIsolation: requestedSandboxMode === "danger-full-access" ? "disabled" as const : "enabled" as const,
-    };
-    Object.assign(codingResult, initialInstructionMetadata);
-    codingArtifacts = await writeCodingArtifacts(run.runDir, analysis.taskBrief, codingResult);
-    await completeAttempt({
-      runDir: run.runDir,
-      step: currentStep,
-      attempt: currentAttempt,
-      status: "failed",
-      codexThreadId: codingResult.threadId,
-      resultStatus: "runtime-error",
-      changedFiles: [],
-      errorSummary: message,
-      workspacePath: codingResult.workspacePath,
-      artifacts: artifactRefs(run.runDir, {
-        codingResultPath: codingArtifacts.codingResultPath,
-        codingInstructionPath: path.join(run.runDir, initialInstructionMetadata.instructionArtifactPath!),
-        diffPath: codingArtifacts.diffPath,
-        statusPath: codingArtifacts.statusPath,
-        taskBriefPath: codingArtifacts.taskBriefPath,
-        runtimeDir: path.join(path.dirname(codingResult.workspacePath), "runtime"),
-        runtimeManifestPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "runtime.json"),
-        runtimeStdoutPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "codex-runtime.stdout.log"),
-        runtimeStderrPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "codex-runtime.stderr.log"),
-        runtimeErrorPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "codex-runtime-error.json"),
-      }),
-    });
-    const finalResult: FinalResult = { schemaVersion: 1, runId: run.runId, status: "failed", terminalMessage: "TASK FAILED", error: { code: "codex_runtime_failed", message, stepId: currentStep.stepId }, workspacePath: codingResult.workspacePath, changedFiles: [], outputs: [], finalResponse: codingResult.finalResponse, finalReviewVerdict: "HUMAN_REQUIRED", totalCodingAttempts: 1, reworkAttempts: 0, finalWorkspacePath: codingResult.workspacePath, finalChangedFiles: [], finalValidationStatus: "BLOCKED", finalReviewReportPath: "review-report.json", finalDiffPath: codingArtifacts.diffPath, finalValidationReportPath: "validation-report.json" };
-    const finalResultPath = await writeFinalResult(run.runDir, finalResult);
-    console.log("CatOS run created");
-    console.log(`Run ID: ${run.runId}`);
-    console.log(`Codex sandbox mode: ${codingResult.sandboxMode} (isolation: ${codingResult.sandboxIsolation})`);
-    console.log(`Final status: ${finalResult.status}`);
-    console.log(`Final result: ${finalResultPath}`);
-    return;
-  }
-  await appendTimelineEvent(run.runDir, { type: "git.run_branch_created", sessionId: run.runId, metadata: { baseBranch, baseCommit: git.baseCommit, runBranch, prTargetBranch } });
-  codingResult.diffCheck = await collectWorkspaceDiffCheck(codingResult.workspacePath);
-  Object.assign(codingResult, initialInstructionMetadata);
-  codingArtifacts = await writeCodingArtifacts(run.runDir, analysis.taskBrief, codingResult);
-  let validationReport = await validationRunner.run({ workspacePath: codingResult.workspacePath, commands: validationCommands });
-  let validationReportPath = await writeValidationReport(run.runDir, validationReport);
-  await completeAttempt({
-    runDir: run.runDir,
-    step: currentStep,
-    attempt: currentAttempt,
-    status: "succeeded",
-    codexThreadId: codingResult.threadId,
-    resultStatus: "completed",
-    changedFiles: codingResult.changedFiles,
-    validationSummary: validationReport.status,
-    workspacePath: codingResult.workspacePath,
-    artifacts: artifactRefs(run.runDir, {
-      codingResultPath: codingArtifacts.codingResultPath,
-      codingInstructionPath: path.join(run.runDir, initialInstructionMetadata.instructionArtifactPath!),
-      diffPath: codingArtifacts.diffPath,
-      statusPath: codingArtifacts.statusPath,
-      taskBriefPath: codingArtifacts.taskBriefPath,
-      validationReportPath,
-      runtimeDir: path.join(path.dirname(codingResult.workspacePath), "runtime"),
-      runtimeManifestPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "runtime.json"),
-      runtimeStdoutPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "codex-runtime.stdout.log"),
-      runtimeStderrPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "codex-runtime.stderr.log"),
-      runtimeErrorPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "codex-runtime-error.json"),
-    }),
-  });
-  let reviewReport = await reviewChange({
-    taskInput: run.input,
-    taskBrief: analysis.taskBrief,
-    codingResult: safeReviewCodingResult(codingResult),
-    workspaceDiff: codingResult.diff,
-    workspaceStatus: codingResult.status,
-    validationReport,
-    projectConstraints: {
-      permissions: loaded.config.permissions,
-      workflow: loaded.config.workflow,
-      codex: { ...loaded.config.codex, sandboxMode: requestedSandboxMode },
-    },
-  }, { provider: options.reviewerProvider });
-  let reviewReportPath = await writeReviewReport(run.runDir, reviewReport);
-
-  const initialCodingResult = codingResult;
-  const initialCodingArtifacts = codingArtifacts;
-  const initialValidationReport = validationReport;
-  const initialValidationReportPath = validationReportPath;
-  const initialReviewReport = reviewReport;
-  const initialReviewReportPath = reviewReportPath;
-  console.log(`Review verdict: ${reviewReport.verdict}`);
-
-  let previousReviewReport = reviewReport;
-  let previousValidationStatus = validationReport.status;
-  let reworkAttempts = 0;
-  let forcedHumanRequired = false;
-
-  while (reviewReport.verdict === "REWORK" && reworkAttempts < maxReworkAttempts && !forcedHumanRequired) {
-    if (reviewReport.blockingFindings.length === 0) {
-      forcedHumanRequired = true;
-      break;
-    }
-    if (reworkAttempts > 0 && hasRepeatedBlockingFinding(previousReviewReport, reviewReport)) {
-      forcedHumanRequired = true;
-      break;
-    }
-    if (reworkAttempts > 0 && previousValidationStatus === "BLOCKED" && validationReport.status === "BLOCKED") {
-      forcedHumanRequired = true;
-      break;
-    }
-
-    const attempt = reworkAttempts + 1;
-    console.log(`Starting rework attempt ${attempt}/${maxReworkAttempts}`);
-    const attemptDir = path.join(run.runDir, "attempts", String(attempt).padStart(2, "0"));
-    const reworkPackage = buildReworkPackage({
-      attempt,
-      taskBrief: analysis.taskBrief,
-      reviewReport,
-      codingResult,
-      validationReport,
-      workspaceDiff: codingResult.diff,
-    });
-    await writeReworkPackage(attemptDir, reworkPackage);
-    const beforeReview = reviewReport;
-    const beforeValidationStatus = validationReport.status;
-    currentStep = await import("../runs/sessionModel.js").then(m => m.loadStep(run.runDir, currentStep.stepId));
-    const reworkInstruction = buildReworkCodexInstruction({ originalTask: goal, taskBrief: analysis.taskBrief, reworkPackage, previousAttemptResult: codingResult.finalResponse, reviewVerdict: reviewReport.verdict });
-    currentAttempt = await startAttempt({ runDir: run.runDir, step: currentStep, prompt: reworkInstruction, runtimeMode: requestedSandboxMode });
-    const reworkInstructionMetadata = await writeCodingInstructionAudit({ runDir: run.runDir, artifactDir: attemptDir, sessionAttemptDir: sessionAttemptDir(run.runDir, currentStep, currentAttempt), instruction: reworkInstruction, originalTask: goal, attemptNumber: currentAttempt.order });
-    await assertWorkspaceBranch(run.runDir);
-    codingResult = await codingWorker.continueTask({
-      originalTask: goal,
-      taskBrief: analysis.taskBrief,
-      threadId: codingResult.threadId,
-      workspacePath: codingResult.workspacePath,
-      workspaceRoot,
-      reworkPackage,
-      sandboxMode: requestedSandboxMode,
-      approvalPolicy: "never",
-      attemptNumber: currentAttempt.order,
-      previousAttemptResult: codingResult.finalResponse,
-      reviewVerdict: reviewReport.verdict,
-    });
-    codingResult.diffCheck = await collectWorkspaceDiffCheck(codingResult.workspacePath);
-    Object.assign(codingResult, reworkInstructionMetadata);
-    await writeCodingArtifacts(attemptDir, analysis.taskBrief, codingResult);
-    validationReport = await validationRunner.run({ workspacePath: codingResult.workspacePath, commands: validationCommands });
-    validationReportPath = await writeValidationReport(attemptDir, validationReport);
-    await completeAttempt({
-      runDir: run.runDir,
-      step: currentStep,
-      attempt: currentAttempt,
-      status: "succeeded",
-      codexThreadId: codingResult.threadId,
-      resultStatus: "completed",
-      changedFiles: codingResult.changedFiles,
-      validationSummary: validationReport.status,
-      workspacePath: codingResult.workspacePath,
-      artifacts: artifactRefs(run.runDir, {
-        codingResultPath: path.join(attemptDir, "coding-result.json"),
-        codingInstructionPath: path.join(attemptDir, "coding-instruction.md"),
-        diffPath: path.join(attemptDir, "workspace.diff"),
-        statusPath: path.join(attemptDir, "workspace-status.txt"),
-        taskBriefPath: path.join(attemptDir, "task-brief.json"),
-        validationReportPath,
-        reviewReportPath,
-        runtimeDir: path.join(path.dirname(codingResult.workspacePath), "runtime"),
-        runtimeManifestPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "runtime.json"),
-        runtimeStdoutPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "codex-runtime.stdout.log"),
-        runtimeStderrPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "codex-runtime.stderr.log"),
-        runtimeErrorPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "codex-runtime-error.json"),
-      }),
-    });
-    reviewReport = await reviewChange({
-      taskInput: run.input,
-      taskBrief: analysis.taskBrief,
-      codingResult: safeReviewCodingResult(codingResult),
-      workspaceDiff: codingResult.diff,
-      workspaceStatus: codingResult.status,
-      validationReport,
-      projectConstraints: {
-        permissions: loaded.config.permissions,
-        workflow: loaded.config.workflow,
-        codex: { ...loaded.config.codex, sandboxMode: requestedSandboxMode },
-      },
-      reworkContext: {
-        reworkPackage,
-        previousBlockingFindings: reworkPackage.blockingFindings,
-        requiredChanges: reworkPackage.mustChange,
-        reworkReason: reworkPackage.previousAttemptSummary,
-      },
-    }, { provider: options.reviewerProvider });
-    reviewReportPath = await writeReviewReport(attemptDir, reviewReport);
-    console.log(`Rework validation: ${validationReport.status}`);
-    console.log(`Rework review verdict: ${reviewReport.verdict}`);
-    reworkAttempts = attempt;
-    previousReviewReport = beforeReview;
-    previousValidationStatus = beforeValidationStatus;
-  }
-
-  let finalStatus: FinalResult["status"];
-  if (forcedHumanRequired || reviewReport.verdict === "HUMAN_REQUIRED") {
-    finalStatus = "HUMAN_REQUIRED";
-  } else if (reviewReport.verdict === "ACCEPT") {
-    finalStatus = "ACCEPTED";
-  } else {
-    finalStatus = "REWORK_LIMIT_REACHED";
-  }
-  const finalChangedFileObjects = await Promise.all(codingResult.changedFiles.map(async file => {
-    let exists = false;
-    try { exists = (await stat(path.join(codingResult.workspacePath, file))).isFile(); } catch {}
-    return { path: file, changeType: (exists ? (await isTracked(codingResult.workspacePath, file) ? "modified" : "created") : "deleted") as "created" | "modified" | "deleted", exists };
-  }));
-  const finalOutputs = finalChangedFileObjects.filter(file => file.exists && /\.(md|txt|json|diff|log|ts|tsx|js|css|html|ya?ml)$/i.test(file.path)).map(file => ({ label: path.basename(file.path), path: file.path, type: "file" as const, contentAvailable: true }));
-  const finalResult: FinalResult = {
-    schemaVersion: 1,
-    runId: run.runId,
-    status: finalStatus,
-    terminalMessage: finalStatus === "ACCEPTED" ? "TASK COMPLETE" : finalStatus === "HUMAN_REQUIRED" ? "HUMAN REVIEW REQUIRED" : "TASK FAILED",
-    error: finalStatus === "REWORK_LIMIT_REACHED" ? { code: "attempt_exhaustion", message: reviewReport.summary || "Review requested rework, but no reason was recorded.", stepId: currentStep.stepId, details: reviewReport.blockingFindings.map(f => `${f.title}: ${f.requiredChange}`).join("\n") } : null,
-    workspacePath: codingResult.workspacePath,
-    changedFiles: finalChangedFileObjects,
-    outputs: finalOutputs,
-    finalResponse: codingResult.finalResponse,
-    finalReviewVerdict: reviewReport.verdict,
-    totalCodingAttempts: 1 + reworkAttempts,
-    reworkAttempts,
-    finalWorkspacePath: codingResult.workspacePath,
-    finalChangedFiles: codingResult.changedFiles,
-    finalValidationStatus: validationReport.status,
-    finalReviewReportPath: reviewReportPath,
-    finalDiffPath: path.join(reworkAttempts === 0 ? run.runDir : path.join(run.runDir, "attempts", String(reworkAttempts).padStart(2, "0")), "workspace.diff"),
-    finalValidationReportPath: validationReportPath,
-  };
-  const finalResultPath = await writeFinalResult(run.runDir, finalResult);
-
-
-  console.log("CatOS run created");
-  console.log(`Run ID: ${run.runId}`);
-  console.log(`Project: ${loaded.config.project.id} (${loaded.config.project.name})`);
-  console.log(`Config source: ${configSource}`);
-  console.log(`Repository: ${loaded.absoluteRepoPath}`);
-  console.log(`Input: ${run.inputPath}`);
-  console.log(`Task brief: ${taskBriefPath}`);
-  console.log(`Workspace: ${initialCodingResult.workspacePath}`);
-  console.log(`Codex sandbox mode: ${initialCodingResult.sandboxMode} (isolation: ${initialCodingResult.sandboxIsolation})`);
-  console.log(`Changed files: ${initialCodingResult.changedFiles.length}`);
-  if (initialCodingResult.changedFiles.length === 0) {
-    console.log("Codex Worker completed without file changes.");
-  }
-  console.log(`Diff: ${initialCodingArtifacts.diffPath}`);
-  console.log(`Codex thread ID: ${initialCodingResult.threadId}`);
-  console.log(`Task Analyst attempts: ${analysis.attempts}`);
-  console.log(`Validation: ${initialValidationReport.status}`);
-  for (const result of initialValidationReport.results) {
-    const exit = result.exitCode === null ? "null" : String(result.exitCode);
-    console.log(`- ${result.name}: ${result.status} (exit ${exit}, ${(result.durationMs / 1000).toFixed(1)}s)`);
-  }
-  console.log(`Validation report: ${initialValidationReportPath}`);
-  console.log(`Review verdict: ${initialReviewReport.verdict}`);
-  console.log(`Review blocking findings: ${initialReviewReport.blockingFindings.length}`);
-  console.log(`Review warnings: ${initialReviewReport.warnings.length}`);
-  console.log(`Review report: ${initialReviewReportPath}`);
-  console.log(`Final status: ${finalResult.status}`);
-  console.log(`Total coding attempts: ${finalResult.totalCodingAttempts}`);
-  console.log(`Final result: ${finalResultPath}`);
+  if (accepted.size !== plan.steps.length && finalStatus === "ACCEPTED") finalStatus = "REWORK_LIMIT_REACHED";
+  const finalChanged = codingResult?.changedFiles ?? []; const finalChangedFileObjects = await Promise.all(finalChanged.map(async file => { let exists = false; try { exists = (await stat(path.join(codingResult!.workspacePath, file))).isFile(); } catch {} return { path: file, changeType: (exists ? (await isTracked(codingResult!.workspacePath, file) ? "modified" : "created") : "deleted") as "created" | "modified" | "deleted", exists }; }));
+  const finalResult: FinalResult = { schemaVersion: 1, runId: run.runId, status: finalStatus, terminalMessage: finalStatus === "ACCEPTED" ? "TASK COMPLETE" : finalStatus === "HUMAN_REQUIRED" ? "HUMAN REVIEW REQUIRED" : "TASK FAILED", error: terminalError, workspacePath: codingResult?.workspacePath ?? workspacePath, changedFiles: finalChangedFileObjects, outputs: finalChangedFileObjects.filter((f) => f.exists).map((f) => ({ label: path.basename(f.path), path: f.path, type: "file" as const, contentAvailable: true })), finalResponse: codingResult?.finalResponse ?? "", finalReviewVerdict: reviewReport?.verdict ?? "HUMAN_REQUIRED", totalCodingAttempts: totalAttempts, reworkAttempts, finalWorkspacePath: codingResult?.workspacePath ?? workspacePath, finalChangedFiles: finalChanged, finalValidationStatus: validationReport?.status ?? "SKIPPED", finalReviewReportPath: reviewReportPath, finalDiffPath: "workspace.diff", finalValidationReportPath: validationReportPath ?? "validation-report.json" };
+  const finalResultPath = await writeFinalResult(run.runDir, finalResult); await writeFinalReport(run.runDir); console.log("CatOS run created"); console.log(`Run ID: ${run.runId}`); console.log(`Project: ${loaded.config.project.id} (${loaded.config.project.name})`); console.log(`Config source: ${configSource}`); console.log(`Repository: ${loaded.absoluteRepoPath}`); console.log(`Input: ${run.inputPath}`); console.log(`Task brief: ${taskBriefPath}`); console.log(`Workspace: ${codingResult?.workspacePath ?? workspacePath}`); console.log(`Final status: ${finalResult.status}`); console.log(`Total coding attempts: ${finalResult.totalCodingAttempts}`); console.log(`Final result: ${finalResultPath}`);
 }

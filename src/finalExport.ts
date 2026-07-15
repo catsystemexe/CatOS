@@ -99,13 +99,28 @@ export async function ensureStepResultArtifacts(runDir: string): Promise<Array<{
   }
   return STEP_REPORTS.map(label=>({label,path:label,kind:"step-report" as const,readable:true}));
 }
+async function findStepResultFiles(dir: string): Promise<string[]> {
+  const out: string[] = [];
+  try {
+    const entries = await (await import("node:fs/promises")).readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const p = path.join(dir, entry.name);
+      if (entry.isDirectory()) out.push(...await findStepResultFiles(p));
+      else if (entry.name === "step-result.json") out.push(p);
+    }
+  } catch {}
+  return out;
+}
+
 export async function writeSessionReport(runDir: string): Promise<string> { return writeFinalReport(runDir); }
 export async function writeFinalReport(runDir: string): Promise<string> {
   await ensureStepResultArtifacts(runDir);
   const [input, session, finalResult] = await Promise.all([readJson(path.join(runDir,"input.json")), readJson(path.join(runDir,"session.json")), readJson(path.join(runDir,"final-result.json"))]);
   const rows = await buildUiTimeline(runDir, { includeFinal: false });
+  const stepResultFiles = await findStepResultFiles(path.join(runDir, "steps"));
+  const stepResults = (await Promise.all(stepResultFiles.map((file) => readJson(file)))).filter(Boolean).sort((a:any,b:any)=>(a.sequence ?? 0)-(b.sequence ?? 0));
   const status = finalResult?.status ?? await getUiRunStatus(runDir);
   const changed = finalResult?.finalChangedFiles ?? finalResult?.changedFiles?.map((f:any)=>f.path) ?? [];
-  const md=["# AutoCodex Final Report","","## Run",`- run ID: ${session?.runId ?? input?.runId ?? finalResult?.runId ?? path.basename(runDir)}`,`- repository: ${session?.git?.remoteUrl ? githubFullName(session.git.remoteUrl) : input?.repositoryFullName ?? session?.git?.repositoryFullName ?? "-"}`,`- selected base branch: ${session?.git?.baseBranch ?? input?.baseBranch ?? "-"}`,`- run branch: ${session?.git?.runBranch ?? session?.branch ?? "-"}`,`- terminal status: ${status}`,`- duration: ${rows.reduce((a,r)=>a+(r.durationMs??0),0) || "-"}`,"","## Task",input?.goal ?? input?.task ?? session?.goal ?? "-","","## Steps",...rows.map(r=>[`### ${r.label}${r.phase === "coding" ? " (actor: Codex)" : ""}`,`- status: ${r.status}`,`- duration: ${r.durationMs ?? "-"}`,`- report: ${r.report?.path ?? "-"}`].join("\n")),"","## Changed files",...safeList(changed,"- none recorded"),"","## Result",finalResult?.terminalMessage ?? `Run ended with ${status}.`,"","## Error",finalResult?.error?clip(JSON.stringify(finalResult.error,null,2), 2000):"- none","","## Final response",sanitizeUserVisibleText(finalResult?.finalResponse ?? "-"),""] .join("\n");
+  const md=["# AutoCodex Final Report","","## Run",`- run ID: ${session?.runId ?? input?.runId ?? finalResult?.runId ?? path.basename(runDir)}`,`- repository: ${session?.git?.remoteUrl ? githubFullName(session.git.remoteUrl) : input?.repositoryFullName ?? session?.git?.repositoryFullName ?? "-"}`,`- selected base branch: ${session?.git?.baseBranch ?? input?.baseBranch ?? "-"}`,`- run branch: ${session?.git?.runBranch ?? session?.branch ?? "-"}`,`- terminal status: ${status}`,`- duration: ${rows.reduce((a,r)=>a+(r.durationMs??0),0) || "-"}`,"","## Task",input?.goal ?? input?.task ?? session?.goal ?? "-","","## Steps",...(stepResults.length ? stepResults.map((sr:any)=>[`### Step ${sr.sequence} — ${sr.title}`,`- status: ${sr.status}`,`- accepted attempt: ${sr.acceptedAttempt}`,`- report: steps/${String(sr.sequence).padStart(3,"0")}-${sr.stepId}/STEP_REPORT.md`,`- summary: ${sanitizeUserVisibleText(sr.summary ?? "-")}`].join("\n")) : rows.map(r=>[`### ${r.label}${r.phase === "coding" ? " (actor: Codex)" : ""}`,`- status: ${r.status}`,`- duration: ${r.durationMs ?? "-"}`,`- report: ${r.report?.path ?? "-"}`].join("\n"))),"","## Timeline",...rows.map(r=>`- ${r.sequence}. ${r.label}: ${r.status} (${r.report?.path ?? "no report"})`),"","## Changed files",...safeList(changed,"- none recorded"),"","## Result",finalResult?.terminalMessage ?? `Run ended with ${status}.`,"","## Error",finalResult?.error?clip(JSON.stringify(finalResult.error,null,2), 2000):"- none","","## Final response",sanitizeUserVisibleText(finalResult?.finalResponse ?? "-"),""] .join("\n");
   const out=path.join(runDir,"FINAL_REPORT.md"); await writeFile(out,md,"utf8"); return out;
 }

@@ -40,7 +40,7 @@ export const finalResultSchema = z.object({
   outputs: z.array(outputFileSchema).optional(),
   runArtifacts: z.array(runArtifactSchema).optional(),
   finalResponse: z.string().optional(),
-  finalReviewVerdict: z.enum(["ACCEPT", "REWORK", "HUMAN_REQUIRED"]),
+  finalReviewVerdict: z.enum(["ACCEPT", "REWORK", "HUMAN_REQUIRED", "STOP"]),
   totalCodingAttempts: z.number().int().positive(),
   reworkAttempts: z.number().int().nonnegative(),
   finalWorkspacePath: z.string().min(1),
