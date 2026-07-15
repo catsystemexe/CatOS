@@ -1,87 +1,146 @@
-Pravidla vytváření ChatGPT handoffů
+# ChatGPT Handoff
 
-Soubor docs/handoffs/CHATGPT_HANDOFF_TEMPLATE.md obsahuje závaznou strukturu a pravidla handoffu.
+This is a development-process handoff. It is not an AutoCodex runtime CODEX/VALIDATION/REVIEW report.
 
-ChatGPT handoff nevytvářej pouze při ukončení celé Codex session. Vytvoř nový samostatný handoff po každém významném implementačním nebo opravném kroku, který má být předán ChatGPT k review.
+## Checkpoint
 
-Každý krok musí vytvořit nový soubor
+- date
+- checkpoint number
+- short name
+- branch
+- commit hash
+- PR target
+- implementation status
 
-Nový handoff ukládej do:
+## Objective
 
-docs/handoffs/sessions/
+What this specific step was intended to accomplish.
 
-Použij název:
+## Starting state
 
-YYYY-MM-DD_NN_short-description.md
+Only the relevant previous state.
 
-Příklad:
+Do not paste the complete previous handoff.
 
-docs/handoffs/sessions/2026-07-12_05_untracked-diff-fix.md
+## Changes completed
 
-Kde:
+Concrete changes made in this checkpoint.
 
-* YYYY-MM-DD je datum,
-* NN je pořadové číslo handoffu v daném dni,
-* short-description stručně popisuje konkrétní krok.
+Group by:
 
-Nikdy nepřepisuj starší archivní handoff.
+- architecture / data contract
+- backend
+- frontend
+- tests
+- documentation
 
-CURRENT_CHATGPT_HANDOFF.md
+Omit empty groups.
 
-Po vytvoření nového archivního handoffu aktualizuj také:
+## Files changed
 
-docs/handoffs/CURRENT_CHATGPT_HANDOFF.md
+Exact file paths with a short explanation.
 
-Tento soubor musí obsahovat přesnou kopii nejnovějšího archivního handoffu.
+## Behavior before
 
-CURRENT_CHATGPT_HANDOFF.md je pouze pohodlný ukazatel na poslední stav. Není náhradou historického handoffu.
+What the system did before this checkpoint.
 
-Kdy vytvořit nový handoff
+## Behavior after
 
-Nový samostatný handoff vytvoř zejména po:
+What the system does now.
 
-* dokončení implementačního kroku,
-* opravě chyby nalezené při review,
-* změně architektonického rozhodnutí,
-* změně datového kontraktu,
-* doplnění významných testů,
-* změně validačního výsledku,
-* odblokování dříve blokované dependency nebo runtime validace.
+## Contracts and invariants
 
-Nevytvářej nový handoff po každé triviální textové úpravě uvnitř stejného kroku.
+List new or changed invariants.
 
-Obsah handoffu
+Examples:
 
-Každý nový handoff musí popisovat pouze aktuální konkrétní krok a výsledný stav po něm.
+- GitHub selector mirrors GitHub only.
+- Source clone remains immutable.
+- CODEX bwrap failure is blocked, not completed.
+- Placeholder validation is SKIPPED, not PASS.
 
-Nesmí mechanicky kombinovat text předchozího handoffu s novým textem.
+## Validation actually performed
 
-Předchozí kontext shrň pouze stručně v sekci „Výchozí stav“.
+List only commands that were actually run.
 
-Handoff musí jasně rozlišovat:
+For each:
 
-* výchozí stav,
-* změny provedené v tomto kroku,
-* skutečně provedenou validaci,
-* známá rizika,
-* doporučený další krok.
+- command
+- PASS / FAIL / BLOCKED / NOT RUN
+- relevant result
 
-Při pokračování ve stejné Codex session
+Never describe a test as passed when it did not run.
 
-Pokud už v této Codex session existuje CURRENT_CHATGPT_HANDOFF.md, neupravuj pouze tento soubor.
+## Validation not performed
 
-Vždy:
+Explain why and where it must be performed next.
 
-1. zjisti nejvyšší existující pořadové číslo pro aktuální datum,
-2. vytvoř nový archivní handoff s následujícím číslem,
-3. zkopíruj jeho výsledný obsah do CURRENT_CHATGPT_HANDOFF.md,
-4. ponech všechny starší archivní handoffy beze změny.
+## Known issues and risks
 
-Výstup Codexu
+Concrete unresolved problems.
 
-Na konci kroku vždy uveď:
+## Evidence
 
-* cestu k novému archivnímu handoffu,
-* cestu k aktualizovanému CURRENT_CHATGPT_HANDOFF.md,
-* číslo checkpointu,
-* zda byla předchozí archivní dokumentace ponechána beze změny.
+Relevant:
+
+- run IDs
+- report filenames
+- test names
+- error messages
+- screenshots only when genuinely available
+
+Do not include secrets or token values.
+
+## Recommended next step
+
+One focused recommended action.
+
+## Ready state
+
+Use one of:
+
+- READY FOR CHATGPT REVIEW
+- READY FOR REPLIT RETEST
+- READY FOR RUNTIME RETEST
+- READY FOR MERGE
+- NOT READY
+
+Include the reason.
+
+## Git state
+
+- branch
+- commit
+- PR target
+- whether PR was created
+- whether merge was performed
+- working tree state
+
+## Handoff archive
+
+- archive path
+- current handoff path
+- checkpoint number
+- confirmation that older handoffs were left unchanged
+
+## Mandatory rules
+
+1. Create a new handoff after every meaningful implementation or repair checkpoint.
+2. Do not create a handoff for trivial edits inside the same checkpoint.
+3. Never overwrite an archived handoff.
+4. Determine the highest checkpoint number for the current date.
+5. Create:
+
+   `docs/handoffs/sessions/YYYY-MM-DD_NN_short-description.md`
+
+6. Copy the exact same final content to:
+
+   `docs/handoffs/CURRENT_CHATGPT_HANDOFF.md`
+
+7. `CURRENT_CHATGPT_HANDOFF.md` is a pointer/copy, not the historical record.
+8. The archived file and CURRENT file must be byte-identical.
+9. Codex final response must name both paths and the checkpoint number.
+10. Existing archived files must remain unchanged.
+11. Handoffs must describe only the current checkpoint.
+12. Never claim tests passed when they were blocked or not run.
+13. Never include secret values, environment dumps, or unrestricted filesystem paths.
