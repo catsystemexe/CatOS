@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { reviewReportSchema, type ReviewReport } from "../src/schemas/reviewReport.js";
-import { reviewChange, writeReviewReport, createOpenAIReviewerProvider, type ReviewerInput } from "../src/agents/reviewer.js";
+import { buildReviewPrompt, normalizeDiffCheckEvidence, reconcileDiffCheckReview, reviewChange, writeReviewReport, createOpenAIReviewerProvider, type ReviewerInput } from "../src/agents/reviewer.js";
 import type { TaskBrief } from "../src/schemas/taskBrief.js";
 import type { ValidationReport } from "../src/validationRunner.js";
 
@@ -62,6 +62,7 @@ function input(status: ValidationReport["status"] = "PASS"): ReviewerInput {
       changedFiles: ["src/agents/reviewer.ts"],
       sandboxMode: "workspace-write",
       sandboxIsolation: "enabled",
+      diffCheck: { command: "git diff --check", status: "PASS", exitCode: 0, stdout: "", stderr: "", durationMs: 5, limitation: "git diff --check does not inspect untracked file content." },
     },
     workspaceDiff: "diff --git a/src/agents/reviewer.ts b/src/agents/reviewer.ts\n",
     workspaceStatus: " M src/agents/reviewer.ts\n",
@@ -79,6 +80,77 @@ describe("Reviewer", () => {
     hoisted.agentConstructions.length = 0;
     hoisted.finalOutput = acceptReport;
     hoisted.runPrompts.length = 0;
+  });
+
+
+
+  it("passes complete structured diffCheck evidence to the provider", async () => {
+    let received: ReviewerInput | undefined;
+    await reviewChange(input("SKIPPED"), { provider: { review: async (reviewInput) => { received = reviewInput; return acceptReport; } } });
+    expect(received?.codingResult.diffCheck).toMatchObject({ command: "git diff --check", status: "PASS", exitCode: 0, stdout: "", stderr: "", limitation: "git diff --check does not inspect untracked file content." });
+    expect(received?.structuredEvidence?.diffCheck.normalizedState).toBe("SATISFIED");
+  });
+
+  it("renders structured coordinator evidence and evidence precedence in the Review prompt", () => {
+    const prompt = buildReviewPrompt(input("SKIPPED"));
+    expect(prompt).toContain("Structured coordinator evidence");
+    expect(prompt).toContain("git diff --check");
+    expect(prompt).toContain("status: PASS");
+    expect(prompt).toContain("exit code: 0");
+    expect(prompt).toContain("Evidence precedence");
+    expect(prompt).toContain("not by Coding prose");
+    expect(prompt).not.toContain("Authorization: Bearer secret-token");
+    expect(prompt).not.toContain("sk-proj-");
+  });
+
+  it("reconciles PASS diff-check criteria to SATISFIED when Validation skipped it", async () => {
+    const uncertain: ReviewReport = { ...acceptReport, reviewedAcceptanceCriteria: [{ criterion: "git diff --check passes", status: "UNCERTAIN", evidence: "Validation skipped it; no structured output is available." }] };
+    const report = await reviewChange(input("SKIPPED"), { provider: { review: async () => uncertain } });
+    expect(report.reviewedAcceptanceCriteria[0]).toMatchObject({ status: "SATISFIED" });
+    expect(report.reviewedAcceptanceCriteria[0]?.evidence).toContain("Coordinator diffCheck status PASS, command git diff --check, exit code 0");
+    expect(report.reviewedAcceptanceCriteria[0]?.evidence).not.toContain("no structured output");
+  });
+
+  it("reconciles FAIL diff-check criteria away from SATISFIED and adds a blocking finding", async () => {
+    const failed = input();
+    failed.codingResult.diffCheck = { command: "git diff --check", status: "FAIL", exitCode: 1, stdout: "", stderr: "trailing whitespace", durationMs: 5, limitation: "git diff --check does not inspect untracked file content." };
+    const report = await reviewChange(failed, { provider: { review: async () => ({ ...acceptReport, reviewedAcceptanceCriteria: [{ criterion: "clean patch according to git diff --check", status: "SATISFIED", evidence: "Looks clean." }] }) } });
+    expect(report.verdict).toBe("REWORK");
+    expect(report.reviewedAcceptanceCriteria[0]).toMatchObject({ status: "NOT_SATISFIED" });
+    expect(report.blockingFindings.some((finding) => finding.id === "structured-diff-check-failed")).toBe(true);
+  });
+
+  it("does not force BLOCKED or missing diffCheck to PASS", () => {
+    const blocked = normalizeDiffCheckEvidence({ command: "git diff --check", status: "BLOCKED", exitCode: null, stdout: "", stderr: "command unavailable", durationMs: 1, limitation: "command unavailable" });
+    const missing = normalizeDiffCheckEvidence(undefined);
+    expect(blocked.normalizedState).toBe("UNCERTAIN");
+    expect(missing.normalizedState).toBe("UNCERTAIN");
+    expect(blocked.status).toBe("BLOCKED");
+    expect(missing.status).toBe("MISSING");
+  });
+
+  it("preserves untracked-file limitation without using diffCheck to satisfy file-content criteria", async () => {
+    const report = await reviewChange(input("SKIPPED"), { provider: { review: async () => ({ ...acceptReport, reviewedAcceptanceCriteria: [
+      { criterion: "git diff --check passes", status: "UNCERTAIN", evidence: "Validation skipped it." },
+      { criterion: "exact file content matches requested text", status: "UNCERTAIN", evidence: "Needs workspace diff evidence." },
+    ] }) } });
+    expect(report.reviewedAcceptanceCriteria[0]).toMatchObject({ status: "SATISFIED" });
+    expect(report.reviewedAcceptanceCriteria[0]?.evidence).toContain("does not inspect untracked file content");
+    expect(report.reviewedAcceptanceCriteria[1]).toMatchObject({ status: "UNCERTAIN" });
+  });
+
+  it("redacts API keys and authorization headers from the OpenAI Review prompt", () => {
+    const secretInput = input();
+    secretInput.taskInput.goal = "Do not leak sk-proj-abcdefghijklmnopqrstuvwxyz123456 or Authorization: Bearer secret-token";
+    const prompt = buildReviewPrompt(secretInput);
+    expect(prompt).not.toContain("sk-proj-");
+    expect(prompt).not.toContain("secret-token");
+    expect(prompt).toContain("[REDACTED]");
+  });
+
+  it("can reconcile directly for legacy tests without inventing missing PASS", () => {
+    const legacy = reconcileDiffCheckReview({ ...acceptReport, reviewedAcceptanceCriteria: [{ criterion: "git diff --check passes", status: "UNCERTAIN", evidence: "missing" }] }, undefined);
+    expect(legacy.reviewedAcceptanceCriteria[0]).toMatchObject({ status: "UNCERTAIN" });
   });
 
   it("accepts valid ACCEPT when validation passed", async () => {

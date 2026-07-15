@@ -125,7 +125,7 @@ describe("runCommand", () => {
     };
     const reviewerProvider: ReviewerProvider = {
       review: async (input) => {
-        reviewerCalls.push(`${input.taskBrief.objective}|${input.workspaceDiff}|${input.validationReport.status}`);
+        reviewerCalls.push(`${input.taskBrief.objective}|${input.workspaceDiff}|${input.validationReport.status}|${input.codingResult.diffCheck?.status}|${input.codingResult.diffCheck?.command}|${input.codingResult.diffCheck?.exitCode}`);
         return {
           schemaVersion: 1,
           verdict: "ACCEPT",
@@ -155,7 +155,7 @@ describe("runCommand", () => {
     expect(validationReport.results.map((result: { name: string }) => result.name)).toEqual(["typecheck", "test", "build"]);
     await expect(readFile(path.join(runsDir, runDirs[0]!, "workspace.diff"), "utf8")).resolves.toContain("diff --git");
     await expect(readFile(path.join(runsDir, runDirs[0]!, "workspace-status.txt"), "utf8")).resolves.toContain("README.md");
-    expect(reviewerCalls).toEqual([`${brief.objective}|diff --git a/README.md b/README.md\n|PASS`]);
+    expect(reviewerCalls).toEqual([`${brief.objective}|diff --git a/README.md b/README.md\n|PASS|PASS|git diff --check|0`]);
     const reviewReport = JSON.parse(await readFile(path.join(runsDir, runDirs[0]!, "review-report.json"), "utf8"));
     expect(reviewReport.verdict).toBe("ACCEPT");
     expect(reviewReport.warnings).toHaveLength(1);
@@ -389,6 +389,10 @@ describe("runCommand rework loop", () => {
     expect(continueInputs[0]!.workspacePath).toContain(path.join(runId!, "workspace"));
     expect(validationCalls).toHaveLength(2);
     expect(reviewInputs).toHaveLength(2);
+    expect(reviewInputs[0]!.codingResult.diffCheck).toMatchObject({ status: "PASS", command: "git diff --check", exitCode: 0 });
+    expect(reviewInputs[1]!.codingResult.diffCheck).toMatchObject({ status: "PASS", command: "git diff --check", exitCode: 0 });
+    expect(reviewInputs[0]!.codingResult.finalResponse).toContain("initial");
+    expect(reviewInputs[1]!.codingResult.finalResponse).toContain("rework");
     expect(reviewInputs[0]!.reworkContext).toBeUndefined();
     expect(reviewInputs[1]!.reworkContext).toMatchObject({
       previousBlockingFindings: [{ id: "finding-1", requiredChange: "Change finding-1" }],
