@@ -182,9 +182,9 @@ test("RUN exposes exactly CODEX, VALIDATION, REVIEW, FINAL with report contract"
     { sequence: 4, phase: "final", actor: "script", attempt: 1 },
   ]);
   expect(rows.map((r) => r.report?.label)).toEqual([
-    "coding-result.json",
-    "validation-report.json",
-    "review-report.json",
+    "coding-report.md",
+    "validation-report.md",
+    "review-report.md",
     "FINAL_REPORT.md",
   ]);
   expect(
@@ -232,6 +232,7 @@ test("RUN timeline exposes chronological concrete attempt events", async () => {
   await writeFile(path.join(secondAttemptDir, "validation-report.json"), JSON.stringify({ schemaVersion: 1, status: "PASS", workspacePath: f.ws, results: [] }));
   await writeFile(path.join(secondAttemptDir, "review-report.json"), JSON.stringify({ schemaVersion: 1, verdict: "ACCEPT", summary: "accepted", reviewedAcceptanceCriteria: [], blockingFindings: [], warnings: [] }));
 
+  await writeSessionReport(f.runDir);
   const rows = await buildUiTimeline(f.runDir, { includeFinal: false });
 
   expect(rows.map((r) => [r.sequence, r.label, r.phase, r.actor, r.attempt, r.status])).toEqual([
@@ -241,6 +242,14 @@ test("RUN timeline exposes chronological concrete attempt events", async () => {
     [4, "Coding 2", "coding", "codex", 2, "completed"],
     [5, "Validation 2", "validation", "script", 2, "passed"],
     [6, "Review 2", "review", "gpt", 2, "accepted"],
+  ]);
+  expect(rows.map((r) => r.report?.label)).toEqual([
+    "coding-report.md",
+    "validation-report.md",
+    "review-report.md",
+    "coding-report.md",
+    "validation-report.md",
+    "review-report.md",
   ]);
 });
 test("CODEX report exists for completed and failed CODEX and includes final response/workspace result", async () => {
@@ -363,9 +372,9 @@ for (const [status, verdict] of [
     });
     const md = await readFile(path.join(f.runDir, "FINAL_REPORT.md"), "utf8");
     expect(md).toContain("# AutoCodex Final Report");
-    expect(md).toContain("report: 01_CODEX_REPORT.md");
-    expect(md).toContain("report: 02_VALIDATION_REPORT.md");
-    expect(md).toContain("report: 03_REVIEW_REPORT.md");
+    expect(md).toContain("report: steps/001-step/attempts/001-attempt/coding-report.md");
+    expect(md).toContain("report: steps/001-step/attempts/001-attempt/validation-report.md");
+    expect(md).toContain("report: steps/001-step/attempts/001-attempt/review-report.md");
   });
 }
 
@@ -408,9 +417,9 @@ test("terminal result availability is checked from files", async () => {
   await rm(path.join(f.runDir, "02_VALIDATION_REPORT.md"));
   const s = await buildUiSystemState(f.runDir);
   expect(s.steps.map((r) => r.report?.label)).toEqual([
-    "coding-result.json",
-    "validation-report.json",
-    "review-report.json",
+    "coding-report.md",
+    "validation-report.md",
+    "review-report.md",
     "FINAL_REPORT.md",
   ]);
   expect(s.steps.every((r) => r.report?.exists && r.report.readable)).toBe(true);

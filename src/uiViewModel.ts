@@ -318,6 +318,12 @@ function phaseLabel(phase: TimelinePhase, attempt: number): string {
 function rowName(phase: TimelinePhase): UiTimelineRow["name"] {
   return phase === "coding" ? "CODEX" : phase === "validation" ? "VALIDATION" : phase === "review" ? "REVIEW" : "FINAL";
 }
+function reportCandidates(phase: TimelinePhase, artifact: string | undefined): Array<string | undefined> {
+  if (phase === "coding") return [artifact?.replace(/coding-result\.json$/, "coding-report.md"), "coding-report.md", artifact, "coding-result.json"];
+  if (phase === "validation") return [artifact?.replace(/validation-report\.json$/, "validation-report.md"), "validation-report.md", artifact, "validation-report.json"];
+  if (phase === "review") return [artifact?.replace(/review-report\.json$/, "review-report.md"), "review-report.md", artifact, "review-report.json", "review-package.md"];
+  return [artifact];
+}
 function actorForPhase(phase: TimelinePhase): TimelineActor {
   return phase === "coding" ? "codex" : phase === "review" ? "gpt" : "script";
 }
@@ -347,16 +353,19 @@ export async function buildUiTimeline(
   const rows: UiTimelineRow[] = [];
   for (const { file, attempt } of parsed) {
     const dir = path.dirname(file);
-    const coding = await firstExisting(runDir, dir, [attempt.artifacts.codingResultPath, "coding-result.json"]);
-    const validation = await firstExisting(runDir, dir, [attempt.artifacts.validationReportPath, "validation-report.json"]);
-    const vr = validation ? await readJson<{ status?: string }>(path.join(runDir, validation)) : undefined;
-    const review = await firstExisting(runDir, dir, [attempt.artifacts.reviewReportPath, "review-report.json", "review-package.md"]);
-    const rr = review?.endsWith(".json") ? await readJson<{ verdict?: string; summary?: string; blockingFindings?: unknown[] }>(path.join(runDir, review)) : undefined;
+    const codingArtifact = await firstExisting(runDir, dir, [attempt.artifacts.codingResultPath, "coding-result.json"]);
+    const validationArtifact = await firstExisting(runDir, dir, [attempt.artifacts.validationReportPath, "validation-report.json"]);
+    const coding = await firstExisting(runDir, dir, reportCandidates("coding", codingArtifact));
+    const validation = await firstExisting(runDir, dir, reportCandidates("validation", validationArtifact));
+    const vr = validationArtifact ? await readJson<{ status?: string; startedAt?: string; finishedAt?: string; durationMs?: number }>(path.join(runDir, validationArtifact)) : undefined;
+    const reviewArtifact = await firstExisting(runDir, dir, [attempt.artifacts.reviewReportPath, "review-report.json", "review-package.md"]);
+    const review = await firstExisting(runDir, dir, reportCandidates("review", reviewArtifact));
+    const rr = reviewArtifact?.endsWith(".json") ? await readJson<{ verdict?: string; summary?: string; blockingFindings?: unknown[]; startedAt?: string; finishedAt?: string; durationMs?: number }>(path.join(runDir, reviewArtifact)) : undefined;
     const eventSpecs: Array<{ phase: TimelinePhase; status: TimelineStatus; rel?: string; startedAt?: string; completedAt?: string; message?: string }> = [
       { phase: "coding", status: attemptStatus(attempt), rel: coding, startedAt: attempt.startedAt, completedAt: attempt.completedAt, message: attempt.errorSummary || (attempt.changedFiles?.length ? `Changed files: ${attempt.changedFiles.join(", ")}` : "Codex attempt completed.") },
     ];
-    if (validation) eventSpecs.push({ phase: "validation", status: validationStatus(vr?.status), rel: validation, message: vr?.status === "PASS" ? "Repository checks passed; task output not yet verified." : vr?.status === "SKIPPED" ? "Repository checks were skipped; task acceptance remains in review." : vr?.status === "BLOCKED" ? "Repository checks were blocked." : `Repository checks failed: ${vr?.status ?? "unknown"}.` });
-    if (review) eventSpecs.push({ phase: "review", status: reviewStatus(rr?.verdict), rel: review, message: rr?.summary || reviewMessage(rr?.verdict, vr?.status) });
+    if (validation) eventSpecs.push({ phase: "validation", status: validationStatus(vr?.status), rel: validation, startedAt: vr?.startedAt, completedAt: vr?.finishedAt, message: vr?.status === "PASS" ? "Repository checks passed; task output not yet verified." : vr?.status === "SKIPPED" ? "Repository checks were skipped; task acceptance remains in review." : vr?.status === "BLOCKED" ? "Repository checks were blocked." : `Repository checks failed: ${vr?.status ?? "unknown"}.` });
+    if (review) eventSpecs.push({ phase: "review", status: reviewStatus(rr?.verdict), rel: review, startedAt: rr?.startedAt, completedAt: rr?.finishedAt, message: rr?.summary || reviewMessage(rr?.verdict, vr?.status) });
     for (const spec of eventSpecs) {
       const sequence = rows.length + 1;
       const report = await reportRef(runDir, spec.rel);
@@ -373,7 +382,7 @@ export async function buildUiTimeline(
         startedAt: spec.startedAt,
         completedAt: spec.completedAt,
         finishedAt: spec.completedAt,
-        durationMs: durMs(spec.startedAt, spec.completedAt),
+        durationMs: (spec.phase === "validation" ? vr?.durationMs : spec.phase === "review" ? rr?.durationMs : undefined) ?? durMs(spec.startedAt, spec.completedAt),
         message: spec.message,
         filesModified: spec.phase === "coding" ? (attempt.changedFiles ?? []) : undefined,
         output: relToRun(runDir, spec.rel),
@@ -398,7 +407,10 @@ export async function buildUiTimeline(
         name: "FINAL",
         label: "Final",
         status: finalTimelineStatus(final?.status, legacyStatus(final?.status)),
-        durationMs: rows.reduce((total, row) => total + (row.durationMs ?? 0), 0),
+        startedAt: final?.startedAt,
+        completedAt: final?.finishedAt,
+        finishedAt: final?.finishedAt,
+        durationMs: final?.durationMs ?? durMs(final?.startedAt, final?.finishedAt),
         message: final?.terminalMessage,
         output: relToRun(runDir, "FINAL_REPORT.md"),
         report,
