@@ -36,14 +36,14 @@ button.primary:disabled{background:#fff;color:#555;border-color:#000}
 .timeline-wrap{min-height:0;overflow:auto;border-top:1px solid #ddd}
 .timeline-list{display:grid;min-width:0}
 .timeline-empty{padding:6px 2px;color:#444}
-.timeline-row{display:grid;grid-template-columns:24px minmax(100px,1fr) 100px 64px 90px;column-gap:8px;align-items:center;padding:3px 2px;border-bottom:1px solid #ddd;min-height:24px;font-size:12px;cursor:pointer}
+.timeline-row{display:grid;grid-template-columns:28px minmax(116px,1fr) 112px 58px 84px;column-gap:6px;align-items:center;padding:2px 2px;border-bottom:1px solid #ddd;min-height:22px;font-size:12px;line-height:1.2;cursor:pointer}
 .timeline-row.selected{background:#eef3ff;outline:1px solid #8aa4d6;outline-offset:-1px}
 .timeline-index,.timeline-status,.timeline-time{color:#333;white-space:nowrap}
-.timeline-step{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.timeline-step{display:flex;align-items:center;gap:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.timeline-step span:last-child{overflow:hidden;text-overflow:ellipsis}.timeline-icon{display:inline-grid;place-items:center;flex:0 0 16px;width:16px;height:16px;border:1px solid #333;border-radius:50%;font-size:10px;font-weight:700;line-height:1}.codex-icon{background:#111;color:#fff}.gpt-icon{background:#eef3ff;color:#111}.script-icon{border-radius:3px;background:#f4f4f4;color:#111}
 .report-action{height:20px;padding:1px 5px;font-size:11px;cursor:pointer}
 #stepViewer{flex:1 1 auto;min-height:0;margin:0;border-top:1px solid #ddd;padding:6px 2px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;font:12px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace;background:#fff;color:#000}
 #viewerTitle{min-width:0;white-space:normal;overflow-wrap:anywhere;word-break:break-word}
-.completed,.failed,.rework,.running,.human_required,.cancelled,.pending,.final,.add,.del,.stopped{color:#000}
+.completed,.passed,.accepted,.failed,.rework,.running,.human_required,.cancelled,.pending,.final,.add,.del,.stopped,.skipped,.blocked,.rework_limit_reached{color:#000}
 @media (max-width:800px){.app-layout{grid-template-columns:minmax(0,1fr)}.branch-row{grid-template-columns:minmax(0,1fr)}.execution-panel{grid-template-rows:auto minmax(0,1fr)}}
 .copy-unavailable{background:#f4f4f4;color:#555;border-color:#777}
 .copy-available{background:#000;color:#fff;border:2px solid #000;font-weight:bold}

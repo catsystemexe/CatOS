@@ -9,26 +9,43 @@ export type UiRunStatus =
   | "completed"
   | "failed"
   | "stopped";
-export type UiTimelineStatus =
-  | "completed"
-  | "failed"
-  | "rework"
+export type TimelineActor = "codex" | "gpt" | "script";
+export type TimelinePhase = "coding" | "validation" | "review" | "final";
+export type TimelineStatus =
   | "running"
-  | "waiting"
-  | "stopped"
-  | "blocked"
+  | "completed"
+  | "passed"
+  | "accepted"
+  | "rework"
   | "skipped"
+  | "blocked"
+  | "failed"
   | "human_required"
-  | "accepted";
-export type UiTimelineRow = {
+  | "stopped"
+  | "rework_limit_reached";
+export type UiTimelineStatus = TimelineStatus | "waiting";
+export type TimelineEvent = {
+  sequence: number;
+  phase: TimelinePhase;
+  actor: TimelineActor;
+  attempt: number;
+  status: TimelineStatus;
+  startedAt?: string;
+  completedAt?: string;
+  durationMs?: number;
+  report?: {
+    label: string;
+    path: string;
+    exists: boolean;
+    readable: boolean;
+  };
+};
+export type UiTimelineRow = TimelineEvent & {
   id: string;
   index: number;
   name: "CODEX" | "VALIDATION" | "REVIEW" | "FINAL";
   label: string;
-  status: UiTimelineStatus;
-  startedAt?: string;
   finishedAt?: string;
-  durationMs?: number;
   message?: string;
   summary?: string;
   errorDetails?: string;
@@ -42,12 +59,6 @@ export type UiTimelineRow = {
     contentAvailable?: boolean;
   };
   artifactPath?: string;
-  report?: {
-    label: string;
-    path: string;
-    exists: boolean;
-    readable: boolean;
-  };
   resultFile?: {
     label: string;
     path: string;
@@ -266,6 +277,51 @@ function reviewMessage(verdict?: string, validation?: string) {
   return undefined;
 }
 
+function validationStatus(status?: string): TimelineStatus {
+  if (status === "PASS") return "passed";
+  if (status === "SKIPPED") return "skipped";
+  if (status === "BLOCKED") return "blocked";
+  if (status) return "failed";
+  return "running";
+}
+function reviewStatus(verdict?: string): TimelineStatus {
+  if (verdict === "ACCEPT") return "accepted";
+  if (verdict === "REWORK") return "rework";
+  if (verdict === "HUMAN_REQUIRED") return "human_required";
+  if (verdict) return "failed";
+  return "running";
+}
+function attemptStatus(attempt: Attempt): TimelineStatus {
+  if (attempt.status === "running") return "running";
+  if (attempt.status === "cancelled") return "stopped";
+  if (attempt.status === "failed" || attempt.status === "timed_out") return "failed";
+  return "completed";
+}
+function finalTimelineStatus(status?: string, runStatus?: UiRunStatus): TimelineStatus {
+  if (status === "ACCEPTED" || status === "completed" || runStatus === "completed") return "accepted";
+  if (status === "HUMAN_REQUIRED" || runStatus === "human_required") return "human_required";
+  if (status === "REWORK_LIMIT_REACHED") return "rework_limit_reached";
+  if (status === "stopped" || runStatus === "stopped") return "stopped";
+  if (status || runStatus === "failed") return "failed";
+  return "running";
+}
+async function reportRef(runDir: string, relPath: string | undefined, label?: string): Promise<UiTimelineRow["report"]> {
+  if (!relPath) return undefined;
+  const normalized = path.isAbsolute(relPath) ? path.relative(runDir, relPath) : relPath;
+  const availability = await fileAvailability(path.join(runDir, normalized));
+  return { label: label ?? path.basename(normalized), path: normalized, exists: availability.exists, readable: availability.readable };
+}
+function phaseLabel(phase: TimelinePhase, attempt: number): string {
+  const base = phase === "coding" ? "Coding" : phase === "validation" ? "Validation" : phase === "review" ? "Review" : "Final";
+  return attempt > 1 && phase !== "final" ? `${base} ${attempt}` : base;
+}
+function rowName(phase: TimelinePhase): UiTimelineRow["name"] {
+  return phase === "coding" ? "CODEX" : phase === "validation" ? "VALIDATION" : phase === "review" ? "REVIEW" : "FINAL";
+}
+function actorForPhase(phase: TimelinePhase): TimelineActor {
+  return phase === "coding" ? "codex" : phase === "review" ? "gpt" : "script";
+}
+
 export async function buildUiTimeline(
   runDir: string,
   options: { includeFinal?: boolean } = {},
@@ -288,143 +344,70 @@ export async function buildUiTimeline(
       (a, b) =>
         a.attempt.order - b.attempt.order || a.file.localeCompare(b.file),
     );
-  const latest = parsed.at(-1);
-  if (!latest) return [];
-  const { file, attempt } = latest;
-  const dir = path.dirname(file);
-  const coding = await firstExisting(runDir, dir, [
-    attempt.artifacts.codingResultPath,
-    "coding-result.json",
-  ]);
-  const validation = await firstExisting(runDir, dir, [
-    attempt.artifacts.validationReportPath,
-    "validation-report.json",
-  ]);
-  const vr = validation
-    ? await readJson<{
-        status?: string;
-        results?: Array<{ name?: string; status?: string; summary?: string }>;
-      }>(path.join(runDir, validation))
-    : undefined;
-  const review = await firstExisting(runDir, dir, [
-    attempt.artifacts.reviewReportPath,
-    "review-report.json",
-    "review-package.md",
-  ]);
-  const rr = review?.endsWith(".json")
-    ? await readJson<{
-        verdict?: string;
-        summary?: string;
-        blockingFindings?: unknown[];
-      }>(path.join(runDir, review))
-    : undefined;
-  const changed = attempt.changedFiles ?? [];
-  const rows: UiTimelineRow[] = [
-    {
-      id: `${attempt.attemptId}:codex`,
-      index: 1,
-      name: "CODEX",
-      label: "CODEX",
-      status:
-        attempt.status === "running"
-          ? "running"
-          : attempt.status === "cancelled"
-            ? "stopped"
-            : attempt.status === "failed"
-              ? "failed"
-              : "completed",
-      startedAt: attempt.startedAt,
-      finishedAt: attempt.completedAt,
-      durationMs: durMs(attempt.startedAt, attempt.completedAt),
-      message:
-        attempt.errorSummary ||
-        (changed.length
-          ? `Changed files: ${changed.join(", ")}`
-          : "Codex attempt completed."),
-      filesModified: changed,
-      output: relToRun(runDir, coding),
-    },
-    {
-      id: `${attempt.attemptId}:validation`,
-      index: 2,
-      name: "VALIDATION",
-      label: "VALIDATION",
-      status: validation
-        ? vr?.status === "PASS"
-          ? "completed"
-          : vr?.status === "SKIPPED"
-            ? "skipped"
-            : vr?.status === "BLOCKED"
-              ? "blocked"
-              : "failed"
-        : "waiting",
-      message: validation
-        ? vr?.status === "PASS"
-          ? "Repository checks passed; task output not yet verified."
-          : vr?.status === "SKIPPED"
-            ? "Repository checks were skipped; task acceptance remains in review."
-            : vr?.status === "BLOCKED"
-              ? "Repository checks were blocked."
-              : `Repository checks failed: ${vr?.status ?? "unknown"}.`
-        : undefined,
-      output: relToRun(runDir, validation),
-    },
-    {
-      id: `${attempt.attemptId}:review`,
-      index: 3,
-      name: "REVIEW",
-      label: "REVIEW",
-      status: review
-        ? rr?.verdict === "ACCEPT"
-          ? "completed"
-          : rr?.verdict === "REWORK" || rr?.verdict === "HUMAN_REQUIRED"
-            ? "rework"
-            : rr
-              ? "failed"
-              : "completed"
-        : "waiting",
-      message: review
-        ? rr?.summary || reviewMessage(rr?.verdict, vr?.status)
-        : undefined,
-      output: relToRun(runDir, review),
-    },
-  ];
+  const rows: UiTimelineRow[] = [];
+  for (const { file, attempt } of parsed) {
+    const dir = path.dirname(file);
+    const coding = await firstExisting(runDir, dir, [attempt.artifacts.codingResultPath, "coding-result.json"]);
+    const validation = await firstExisting(runDir, dir, [attempt.artifacts.validationReportPath, "validation-report.json"]);
+    const vr = validation ? await readJson<{ status?: string }>(path.join(runDir, validation)) : undefined;
+    const review = await firstExisting(runDir, dir, [attempt.artifacts.reviewReportPath, "review-report.json", "review-package.md"]);
+    const rr = review?.endsWith(".json") ? await readJson<{ verdict?: string; summary?: string; blockingFindings?: unknown[] }>(path.join(runDir, review)) : undefined;
+    const eventSpecs: Array<{ phase: TimelinePhase; status: TimelineStatus; rel?: string; startedAt?: string; completedAt?: string; message?: string }> = [
+      { phase: "coding", status: attemptStatus(attempt), rel: coding, startedAt: attempt.startedAt, completedAt: attempt.completedAt, message: attempt.errorSummary || (attempt.changedFiles?.length ? `Changed files: ${attempt.changedFiles.join(", ")}` : "Codex attempt completed.") },
+    ];
+    if (validation) eventSpecs.push({ phase: "validation", status: validationStatus(vr?.status), rel: validation, message: vr?.status === "PASS" ? "Repository checks passed; task output not yet verified." : vr?.status === "SKIPPED" ? "Repository checks were skipped; task acceptance remains in review." : vr?.status === "BLOCKED" ? "Repository checks were blocked." : `Repository checks failed: ${vr?.status ?? "unknown"}.` });
+    if (review) eventSpecs.push({ phase: "review", status: reviewStatus(rr?.verdict), rel: review, message: rr?.summary || reviewMessage(rr?.verdict, vr?.status) });
+    for (const spec of eventSpecs) {
+      const sequence = rows.length + 1;
+      const report = await reportRef(runDir, spec.rel);
+      rows.push({
+        id: `${attempt.attemptId}:${spec.phase}`,
+        sequence,
+        index: sequence,
+        phase: spec.phase,
+        actor: actorForPhase(spec.phase),
+        attempt: attempt.order,
+        name: rowName(spec.phase),
+        label: phaseLabel(spec.phase, attempt.order),
+        status: spec.status,
+        startedAt: spec.startedAt,
+        completedAt: spec.completedAt,
+        finishedAt: spec.completedAt,
+        durationMs: durMs(spec.startedAt, spec.completedAt),
+        message: spec.message,
+        filesModified: spec.phase === "coding" ? (attempt.changedFiles ?? []) : undefined,
+        output: relToRun(runDir, spec.rel),
+        report,
+        resultFile: report,
+        artifactPath: report?.path,
+      });
+    }
+  }
   if (options.includeFinal !== false) {
     const final = await readJson<any>(path.join(runDir, "final-result.json"));
-    const runStatus = final?.status ? legacyStatus(final.status) : undefined;
-    rows.push({
-      id: "final",
-      index: 4,
-      name: "FINAL",
-      label: "FINAL",
-      status: runStatus === "completed" ? "completed" : runStatus === "failed" ? "failed" : runStatus === "stopped" ? "stopped" : runStatus === "human_required" ? "rework" : "waiting",
-      durationMs: final ? rows.reduce((total, row) => total + (row.durationMs ?? 0), 0) : undefined,
-      message: final?.terminalMessage,
-      output: relToRun(runDir, "FINAL_REPORT.md"),
-    });
+    if (final) {
+      const report = await reportRef(runDir, "FINAL_REPORT.md");
+      const sequence = rows.length + 1;
+      rows.push({
+        id: "final",
+        sequence,
+        index: sequence,
+        phase: "final",
+        actor: "script",
+        attempt: parsed.at(-1)?.attempt.order ?? 1,
+        name: "FINAL",
+        label: "Final",
+        status: finalTimelineStatus(final?.status, legacyStatus(final?.status)),
+        durationMs: rows.reduce((total, row) => total + (row.durationMs ?? 0), 0),
+        message: final?.terminalMessage,
+        output: relToRun(runDir, "FINAL_REPORT.md"),
+        report,
+        resultFile: report,
+        artifactPath: report?.path,
+      });
+    }
   }
-  return Promise.all(
-    rows.map(async (r) => {
-      const rel = r.name === "FINAL" ? "FINAL_REPORT.md" : `${String(r.index).padStart(2, "0")}_${r.name}_REPORT.md`;
-      const availability = await fileAvailability(path.join(runDir, rel));
-      return {
-        ...r,
-        report: {
-          label: rel,
-          path: rel,
-          exists: availability.exists,
-          readable: availability.readable,
-        },
-        resultFile: {
-          label: rel,
-          path: rel,
-          exists: availability.exists,
-          readable: availability.readable,
-        },
-        artifactPath: rel,
-      };
-    }),
-  );
+  return rows;
 }
 
 async function deriveError(
