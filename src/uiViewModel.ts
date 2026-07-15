@@ -15,7 +15,11 @@ export type UiTimelineStatus =
   | "rework"
   | "running"
   | "waiting"
-  | "stopped";
+  | "stopped"
+  | "blocked"
+  | "skipped"
+  | "human_required"
+  | "accepted";
 export type UiTimelineRow = {
   id: string;
   index: number;
@@ -348,12 +352,20 @@ export async function buildUiTimeline(
       status: validation
         ? vr?.status === "PASS"
           ? "completed"
-          : "failed"
+          : vr?.status === "SKIPPED"
+            ? "skipped"
+            : vr?.status === "BLOCKED"
+              ? "blocked"
+              : "failed"
         : "waiting",
       message: validation
         ? vr?.status === "PASS"
           ? "Repository checks passed; task output not yet verified."
-          : `Repository checks failed: ${vr?.status ?? "unknown"}.`
+          : vr?.status === "SKIPPED"
+            ? "Repository checks were skipped; task acceptance remains in review."
+            : vr?.status === "BLOCKED"
+              ? "Repository checks were blocked."
+              : `Repository checks failed: ${vr?.status ?? "unknown"}.`
         : undefined,
       output: relToRun(runDir, validation),
     },

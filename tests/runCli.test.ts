@@ -147,6 +147,7 @@ describe("runCommand", () => {
     expect(codingResult.changedFiles).toEqual(["README.md"]);
     expect(codingResult.sandboxMode).toBe("workspace-write");
     expect(codingResult.sandboxIsolation).toBe("enabled");
+    expect(codingResult.diffCheck).toMatchObject({ command: "git diff --check", status: "PASS", exitCode: 0 });
     expect(validationCalls[0]).toContain(`/${runDirs[0]!}/workspace|typecheck:npm run typecheck:true:120000,test:npm run test:true:120000,build:npm run build:true:120000`);
     const validationReport = JSON.parse(await readFile(path.join(runsDir, runDirs[0]!, "validation-report.json"), "utf8"));
     expect(validationReport.status).toBe("PASS");
@@ -409,3 +410,4 @@ describe("runCommand rework loop", () => {
     await expect(readFile(path.join(runDir, "final-result.json"), "utf8")).resolves.toContain("REWORK_LIMIT_REACHED");
   });
 });
+// report-consistency regression: the UI contract test keeps danger-full-access behavior covered.
