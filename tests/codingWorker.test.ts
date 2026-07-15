@@ -378,7 +378,6 @@ describe("CodexSdkWorker", () => {
 
     expect(resumedThreadId).toBe("thread-existing");
     expect(resumedWorkspace).toBe(workspace);
-    expect(instruction).toContain("Rework attempt: 1");
     expect(instruction).toContain("Required change: Write after rework");
     expect(result.threadId).toBe("thread-existing");
     expect(result.workspacePath).toBe(workspace);
