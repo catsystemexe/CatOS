@@ -175,10 +175,16 @@ test("RUN exposes exactly CODEX, VALIDATION, REVIEW, FINAL with report contract"
     "REVIEW",
     "FINAL",
   ]);
+  expect(rows.map((r) => ({ sequence: r.sequence, phase: r.phase, actor: r.actor, attempt: r.attempt }))).toEqual([
+    { sequence: 1, phase: "coding", actor: "codex", attempt: 1 },
+    { sequence: 2, phase: "validation", actor: "script", attempt: 1 },
+    { sequence: 3, phase: "review", actor: "gpt", attempt: 1 },
+    { sequence: 4, phase: "final", actor: "script", attempt: 1 },
+  ]);
   expect(rows.map((r) => r.report?.label)).toEqual([
-    "01_CODEX_REPORT.md",
-    "02_VALIDATION_REPORT.md",
-    "03_REVIEW_REPORT.md",
+    "coding-result.json",
+    "validation-report.json",
+    "review-report.json",
     "FINAL_REPORT.md",
   ]);
   expect(
@@ -191,6 +197,52 @@ test("RUN exposes exactly CODEX, VALIDATION, REVIEW, FINAL with report contract"
   ).toBe(true);
 });
 
+
+test("RUN timeline exposes chronological concrete attempt events", async () => {
+  const f = await fixture();
+  await writeBase(f, "REWORK", "FAIL");
+  const secondAttemptDir = path.join(
+    f.runDir,
+    "steps",
+    "001-step",
+    "attempts",
+    "002-attempt-2",
+  );
+  await mkdir(secondAttemptDir, { recursive: true });
+  await writeFile(
+    path.join(secondAttemptDir, "attempt.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      attemptId: "attempt-2",
+      stepId: "step",
+      order: 2,
+      status: "succeeded",
+      prompt: "p2",
+      startedAt: "2026-07-14T00:01:00.000Z",
+      completedAt: "2026-07-14T00:01:01.000Z",
+      changedFiles: ["docs/AUTOCODEX_E2E_TEST.md"],
+      artifacts: {
+        codingResultPath: path.join(secondAttemptDir, "coding-result.json"),
+        validationReportPath: path.join(secondAttemptDir, "validation-report.json"),
+        reviewReportPath: path.join(secondAttemptDir, "review-report.json"),
+      },
+    }),
+  );
+  await writeFile(path.join(secondAttemptDir, "coding-result.json"), JSON.stringify({ schemaVersion: 1, workspacePath: f.ws, changedFiles: ["docs/AUTOCODEX_E2E_TEST.md"], finalResponse: "fixed" }));
+  await writeFile(path.join(secondAttemptDir, "validation-report.json"), JSON.stringify({ schemaVersion: 1, status: "PASS", workspacePath: f.ws, results: [] }));
+  await writeFile(path.join(secondAttemptDir, "review-report.json"), JSON.stringify({ schemaVersion: 1, verdict: "ACCEPT", summary: "accepted", reviewedAcceptanceCriteria: [], blockingFindings: [], warnings: [] }));
+
+  const rows = await buildUiTimeline(f.runDir, { includeFinal: false });
+
+  expect(rows.map((r) => [r.sequence, r.label, r.phase, r.actor, r.attempt, r.status])).toEqual([
+    [1, "Coding", "coding", "codex", 1, "completed"],
+    [2, "Validation", "validation", "script", 1, "failed"],
+    [3, "Review", "review", "gpt", 1, "rework"],
+    [4, "Coding 2", "coding", "codex", 2, "completed"],
+    [5, "Validation 2", "validation", "script", 2, "passed"],
+    [6, "Review 2", "review", "gpt", 2, "accepted"],
+  ]);
+});
 test("CODEX report exists for completed and failed CODEX and includes final response/workspace result", async () => {
   for (const status of ["succeeded", "failed"]) {
     const f = await fixture();
@@ -355,32 +407,13 @@ test("terminal result availability is checked from files", async () => {
   await writeSessionReport(f.runDir);
   await rm(path.join(f.runDir, "02_VALIDATION_REPORT.md"));
   const s = await buildUiSystemState(f.runDir);
-  expect(s.steps.map((r) => r.report)).toEqual([
-    {
-      label: "01_CODEX_REPORT.md",
-      path: "01_CODEX_REPORT.md",
-      exists: true,
-      readable: true,
-    },
-    {
-      label: "02_VALIDATION_REPORT.md",
-      path: "02_VALIDATION_REPORT.md",
-      exists: false,
-      readable: false,
-    },
-    {
-      label: "03_REVIEW_REPORT.md",
-      path: "03_REVIEW_REPORT.md",
-      exists: true,
-      readable: true,
-    },
-    {
-      label: "FINAL_REPORT.md",
-      path: "FINAL_REPORT.md",
-      exists: true,
-      readable: true,
-    },
+  expect(s.steps.map((r) => r.report?.label)).toEqual([
+    "coding-result.json",
+    "validation-report.json",
+    "review-report.json",
+    "FINAL_REPORT.md",
   ]);
+  expect(s.steps.every((r) => r.report?.exists && r.report.readable)).toBe(true);
 });
 
 test("UI-started RUN requests Replit-compatible Codex runtime mode", async () => {
@@ -557,7 +590,7 @@ test("validation status consistency preserves FAIL, SKIPPED, and FINAL timeline 
   });
   const failRows = await buildUiTimeline(failBlocked.runDir);
   expect(failRows.find((r) => r.name === "VALIDATION")?.status).toBe("failed");
-  expect(failRows.find((r) => r.name === "FINAL")?.status).toBe("failed");
+  expect(failRows.find((r) => r.name === "FINAL")?.status).toBe("rework_limit_reached");
   const failFinal = await readFile(
     path.join(failBlocked.runDir, "FINAL_REPORT.md"),
     "utf8",
