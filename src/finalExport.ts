@@ -16,6 +16,81 @@ function githubFullName(remote?: string) { const m = String(remote ?? "").match(
 function statusSummary(status: string) { return status.split(/\n/).filter(Boolean).slice(0,20); }
 const STEP_REPORTS = ["01_CODEX_REPORT.md", "02_VALIDATION_REPORT.md", "03_REVIEW_REPORT.md"] as const;
 
+async function findAncestorJson(startDir: string, fileName: string): Promise<any> {
+  let dir = startDir;
+  for (let i = 0; i < 8; i++) {
+    const value = await readJson(path.join(dir, fileName));
+    if (value) return value;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return undefined;
+}
+function reportGenerationErrorMd(kind: string, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return [`# ${kind} Report Generation Error`, "", "The source JSON artifact was persisted, but the human-readable Markdown report could not be generated.", "", `- error: ${clip(message, 1000)}`, "", "The source JSON remains available on disk for debugging.", ""].join("\n");
+}
+export async function writeReportGenerationError(attemptDir: string, kind: string, error: unknown): Promise<string | undefined> {
+  try {
+    const out = path.join(attemptDir, `${kind.toLowerCase()}-report-error.md`);
+    await writeFile(out, reportGenerationErrorMd(kind, error), "utf8");
+    return out;
+  } catch {
+    return undefined;
+  }
+}
+export function renderCodingAttemptReport(input: { task?: string; row?: any; coding?: any; diff?: string; wsStatus?: string }): string {
+  const changed = input.coding?.changedFiles ?? input.row?.filesModified ?? [];
+  const diffCheck = input.coding?.diffCheck;
+  return ["# Coding Report", "", "## Actor", "- actor: Codex", "", "## Status", `- status: ${input.row?.status ?? input.coding?.status ?? "completed"}`, `- duration: ${input.row?.durationMs ?? duration(input.row?.startedAt,input.row?.finishedAt)}`, "", "## Task", input.task ?? "-", "", "## Files", ...safeList(changed), "", "## Workspace result", `- changed file count: ${changed.length}`, `- workspace diff is empty: ${String(input.diff ?? "").trim()?"false":"true"}`, "- workspace status summary:", ...safeList(statusSummary(input.wsStatus ?? "")), `- diff-check result: ${diffCheck?.status ?? "not recorded"}`, ...(diffCheck ? [`- diff-check command: ${diffCheck.command ?? "git diff --check"}`, `- diff-check exit code: ${diffCheck.exitCode ?? "-"}`] : []), "", "## Final Codex response", sanitizeUserVisibleText(input.coding?.finalResponse ?? "-"), ""].join("\n");
+}
+export function renderValidationAttemptReport(input: { row?: any; validation?: any; coding?: any }): string {
+  const checks = Array.isArray(input.validation?.results) ? input.validation.results : [];
+  const diffCheck = input.coding?.diffCheck ?? checks.find((r:any)=>/diff.*check/i.test(`${r.name} ${r.command}`));
+  return ["# Validation Report", "", "## Status", `- status: ${input.row?.status ?? input.validation?.status ?? "SKIPPED"}`, `- duration: ${input.row?.durationMs ?? duration(input.validation?.startedAt,input.validation?.finishedAt)}`, "", "## Checks", ...(checks.length?checks.flatMap((r:any)=>[`### ${r.name ?? "check"}`,`- state: ${r.status ?? "SKIPPED"}`,`- command: ${r.command ?? "-"}`,`- exit code: ${r.exitCode ?? "null"}`,`- duration: ${r.durationMs ?? "-"}`,`- concise stdout summary: ${clip(r.stdout,400)}`,`- concise stderr summary: ${clip(r.stderr,400)}`,""]):["No validation checks were recorded.",""]), "## Task-output checks", ...(diffCheck?[`- git diff --check passes: ${diffCheck.status==="PASS"?"yes":"no"}`, `- diff-check status: ${diffCheck.status}`]:["Repository checks completed; task acceptance was not verified by this step."]), "", "## Result", input.validation?.status === "SKIPPED" ? "Repository checks were unavailable or skipped; validation result is SKIPPED, not failed." : `Validation outcome: ${input.validation?.status ?? "not recorded"}.`, ""].join("\n");
+}
+export function renderReviewAttemptReport(input: { row?: any; review?: any; coding?: any; validation?: any; diff?: string }): string {
+  const reviewed = Array.isArray(input.review?.reviewedAcceptanceCriteria) ? input.review.reviewedAcceptanceCriteria : [];
+  const diffCheck = input.coding?.diffCheck ?? input.validation?.results?.find((r:any)=>/diff.*check/i.test(`${r.name} ${r.command}`));
+  const diffEvidence = diffCheck ? [`- structured diff-check: ${diffCheck.status} (${diffCheck.command ?? "git diff --check"})`] : [];
+  const criterionLines = reviewed.length ? reviewed.map((c:any)=>`- ${c.status ?? "UNCERTAIN"}: ${c.criterion}${c.evidence?` — ${c.evidence}`:""}`) : ["- No acceptance criteria were recorded."];
+  const findings = Array.isArray(input.review?.blockingFindings) ? input.review.blockingFindings : [];
+  return ["# Review Report", "", "## Status", `- status: ${input.row?.status ?? (input.review?.verdict === "ACCEPT" ? "accepted" : input.review?.verdict === "REWORK" ? "rework" : "human_required")}`, `- duration: ${input.row?.durationMs ?? duration(input.review?.startedAt,input.review?.finishedAt)}`, "", "## Acceptance criteria", ...criterionLines, "", "## Evidence inspected", `- coding result: ${input.coding ? "available" : "missing"}`, `- validation report: ${input.validation ? "available" : "missing"}`, `- workspace diff: ${String(input.diff ?? "").trim()?"available":"empty or missing"}`, ...diffEvidence, "", "## Decision", input.review?.verdict ?? "HUMAN_REQUIRED", "", "## Reason", sanitizeUserVisibleText(input.review?.summary ?? "Review did not record a reason."), ...(findings.length ? ["", "## Rework instructions", ...findings.map((f:any)=>`- ${f.requiredChange ?? f.message ?? f.title ?? String(f)}`)] : []), ""].join("\n");
+}
+export async function writeCodingAttemptReport(attemptDir: string, input: any = {}): Promise<string> {
+  try {
+    const taskInput = await findAncestorJson(attemptDir, "input.json");
+    const coding = input.coding ?? await readJson(path.join(attemptDir,"coding-result.json"));
+    const diff = input.diff ?? await readText(path.join(attemptDir,"workspace.diff"));
+    const wsStatus = input.wsStatus ?? await readText(path.join(attemptDir,"workspace-status.txt"));
+    const out = path.join(attemptDir,"coding-report.md");
+    await writeFile(out, renderCodingAttemptReport({ task: taskInput?.goal ?? taskInput?.task, row: input.row, coding, diff, wsStatus }), "utf8");
+    return out;
+  } catch (e) { await writeReportGenerationError(attemptDir, "coding", e); return path.join(attemptDir, "coding-report-error.md"); }
+}
+export async function writeValidationAttemptReport(attemptDir: string, input: any = {}): Promise<string> {
+  try {
+    const validation = input.validation ?? await readJson(path.join(attemptDir,"validation-report.json"));
+    const coding = input.coding ?? await readJson(path.join(attemptDir,"coding-result.json"));
+    const out = path.join(attemptDir,"validation-report.md");
+    await writeFile(out, renderValidationAttemptReport({ row: input.row, validation, coding }), "utf8");
+    return out;
+  } catch (e) { await writeReportGenerationError(attemptDir, "validation", e); return path.join(attemptDir, "validation-report-error.md"); }
+}
+export async function writeReviewAttemptReport(attemptDir: string, input: any = {}): Promise<string> {
+  try {
+    const review = input.review ?? await readJson(path.join(attemptDir,"review-report.json"));
+    const validation = input.validation ?? await readJson(path.join(attemptDir,"validation-report.json"));
+    const coding = input.coding ?? await readJson(path.join(attemptDir,"coding-result.json"));
+    const diff = input.diff ?? await readText(path.join(attemptDir,"workspace.diff"));
+    const out = path.join(attemptDir,"review-report.md");
+    await writeFile(out, renderReviewAttemptReport({ row: input.row, review, validation, coding, diff }), "utf8");
+    return out;
+  } catch (e) { await writeReportGenerationError(attemptDir, "review", e); return path.join(attemptDir, "review-report-error.md"); }
+}
+
+
 async function latestAttemptDir(runDir: string) {
   const rows = await buildUiTimeline(runDir, { includeFinal: false });
   const codex = rows[0];
@@ -70,36 +145,17 @@ export async function ensureStepResultArtifacts(runDir: string): Promise<Array<{
     const attemptRows = rows.filter(r=>r.attempt===codingRow.attempt);
     const sourcePath = codingRow.report?.path ?? codingRow.output?.path;
     const attemptDir = sourcePath ? path.dirname(path.join(runDir, sourcePath)) : runDir;
-    const [attemptCoding, attemptValidation, attemptReview] = await Promise.all([
-      readJson(path.join(attemptDir,"coding-result.json")),
-      readJson(path.join(attemptDir,"validation-report.json")),
-      readJson(path.join(attemptDir,"review-report.json")),
-    ]);
-    const attemptDiff = await readText(path.join(attemptDir,"workspace.diff")) || diff;
-    const attemptStatusText = await readText(path.join(attemptDir,"workspace-status.txt")) || wsStatus;
-    const attemptChanged = attemptCoding?.changedFiles ?? codingRow.filesModified ?? [];
-    const attemptDiffCheck = attemptCoding?.diffCheck ?? attemptValidation?.results?.find((r:any)=>/diff.*check/i.test(`${r.name} ${r.command}`));
-    const cRow = attemptRows.find(r=>r.phase==="coding");
-    const vRow = attemptRows.find(r=>r.phase==="validation");
-    const rRow = attemptRows.find(r=>r.phase==="review");
-    const cMd = ["# Coding Report", "", "## Actor", "- actor: Codex", "", "## Status", `- status: ${cRow?.status ?? "waiting"}`, `- duration: ${cRow?.durationMs ?? duration(cRow?.startedAt,cRow?.finishedAt)}`, "", "## Task", input?.goal ?? input?.task ?? "-", "", "## Files", ...safeList(attemptChanged), "", "## Workspace result", `- changed file count: ${attemptChanged.length}`, `- workspace diff is empty: ${attemptDiff.trim()?"false":"true"}`, "- workspace status summary:", ...safeList(statusSummary(attemptStatusText)), `- diff-check result: ${attemptDiffCheck?.status ?? "not recorded"}`, "", "## Final Codex response", sanitizeUserVisibleText(attemptCoding?.finalResponse ?? "-"), ""].join("\n");
-    await writeFile(path.join(attemptDir,"coding-report.md"), cMd, "utf8");
-    if (vRow || attemptValidation) {
-      const vChecks = Array.isArray(attemptValidation?.results) ? attemptValidation.results : [];
-      const vMd = ["# Validation Report", "", "## Status", `- status: ${vRow?.status ?? attemptValidation?.status ?? "waiting"}`, `- duration: ${vRow?.durationMs ?? duration(attemptValidation?.startedAt,attemptValidation?.finishedAt)}`, "", "## Checks", ...(vChecks.length?vChecks.flatMap((r:any)=>[`### ${r.name ?? "check"}`,`- state: ${r.status ?? "SKIPPED"}`,`- command: ${r.command ?? "-"}`,`- duration: ${r.durationMs ?? "-"}`,""]):["No validation checks were recorded.",""]), "## Task-output checks", ...(attemptDiffCheck?[`- git diff --check passes: ${attemptDiffCheck.status==="PASS"?"yes":"no"}`, `- diff-check status: ${attemptDiffCheck.status}`]:["Repository checks completed; task acceptance was not verified by this step."]), ""].join("\n");
-      await writeFile(path.join(attemptDir,"validation-report.md"), vMd, "utf8");
-    }
-    if (rRow || attemptReview) {
-      const reviewed = Array.isArray(attemptReview?.reviewedAcceptanceCriteria) ? attemptReview.reviewedAcceptanceCriteria : [];
-      const diffEvidence = attemptDiffCheck ? [`- structured diff-check: ${attemptDiffCheck.status} (${attemptDiffCheck.command ?? "git diff --check"})`] : [];
-      const criterionLines = reviewed.length ? reviewed.map((c:any)=>`- ${c.status ?? "UNCERTAIN"}: ${c.criterion}${c.evidence?` — ${c.evidence}`:""}`) : (attemptDiffCheck ? [`- SATISFIED: workspace diff has no whitespace errors — structured diff-check ${attemptDiffCheck.status}`] : ["- No acceptance criteria were recorded."]);
-      const rMd = ["# Review Report", "", "## Status", `- status: ${rRow?.status ?? "waiting"}`, `- duration: ${rRow?.durationMs ?? duration(attemptReview?.startedAt,attemptReview?.finishedAt)}`, "", "## Acceptance criteria", ...criterionLines, "", "## Evidence inspected", `- coding result: ${attemptCoding ? "available" : "missing"}`, `- validation report: ${attemptValidation ? "available" : "missing"}`, `- workspace diff: ${attemptDiff.trim()?"available":"empty or missing"}`, ...diffEvidence, "", "## Decision", attemptReview?.verdict ?? "HUMAN_REQUIRED", "", "## Reason", sanitizeUserVisibleText(attemptReview?.summary ?? "Review did not record a reason."), ""].join("\n");
-      await writeFile(path.join(attemptDir,"review-report.md"), rMd, "utf8");
-    }
+    await writeCodingAttemptReport(attemptDir, { row: attemptRows.find(r=>r.phase==="coding") });
+    if (await readJson(path.join(attemptDir,"validation-report.json"))) await writeValidationAttemptReport(attemptDir, { row: attemptRows.find(r=>r.phase==="validation") });
+    if (await readJson(path.join(attemptDir,"review-report.json"))) await writeReviewAttemptReport(attemptDir, { row: attemptRows.find(r=>r.phase==="review") });
   }
   return STEP_REPORTS.map(label=>({label,path:label,kind:"step-report" as const,readable:true}));
 }
-export async function writeSessionReport(runDir: string): Promise<string> { return writeFinalReport(runDir); }
+export async function writeSessionReport(runDir: string): Promise<string> {
+  await ensureStepResultArtifacts(runDir);
+  if (await readJson(path.join(runDir,"final-result.json"))) return writeFinalReport(runDir);
+  return path.join(runDir, "SESSION_REPORT.md");
+}
 export async function writeFinalReport(runDir: string): Promise<string> {
   await ensureStepResultArtifacts(runDir);
   const [input, session, finalResult] = await Promise.all([readJson(path.join(runDir,"input.json")), readJson(path.join(runDir,"session.json")), readJson(path.join(runDir,"final-result.json"))]);

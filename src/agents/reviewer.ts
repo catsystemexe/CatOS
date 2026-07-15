@@ -8,6 +8,7 @@ import type { WorkspaceDiffCheck } from "../gitWorkspaceState.js";
 import type { ValidationReport } from "../validationRunner.js";
 import type { ProjectConfig } from "../config/projectConfigSchema.js";
 import type { ReworkPackage } from "../schemas/reworkPackage.js";
+import { writeReviewAttemptReport } from "../finalExport.js";
 
 export const DEFAULT_REVIEW_PACKAGE_MAX_BYTES = 512_000;
 
@@ -324,6 +325,7 @@ export async function writeReviewReport(runDir: string, report: ReviewReport): P
   await mkdir(runDir, { recursive: true });
   const reportPath = path.join(runDir, "review-report.json");
   await writeFile(reportPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+  await writeReviewAttemptReport(runDir, { review: parsed });
   return reportPath;
 }
 

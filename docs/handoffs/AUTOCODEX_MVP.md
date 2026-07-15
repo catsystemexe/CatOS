@@ -393,3 +393,19 @@ Create `docs/AUTOCODEX_E2E_TEST.md` with exact requested content and verify:
 - No automatic Git publication.
 
 Previous design note: earlier documents described Project/Profile selectors, local repository discovery, manual repository paths, a separate OUTPUT panel, session-report wording, and a runtime GPT handoff based only on the final Codex response. Those are not the current MVP contract.
+
+## 17. Report lifecycle and Final row contract
+
+Per-attempt human-readable Markdown reports are generated immediately when each concrete terminal event persists its source JSON artifact:
+
+- Coding persists `coding-result.json` and then writes `coding-report.md` in the same attempt directory.
+- Validation persists `validation-report.json` and then writes `validation-report.md` in the same attempt directory, including `SKIPPED` results.
+- Review persists the reconciled `review-report.json` and then writes `review-report.md` in the same attempt directory.
+
+The source JSON artifacts remain the authoritative machine-readable evidence on disk. Terminal UI `REPORT` actions default to the per-attempt Markdown report, not raw JSON; raw JSON is retained for debugging and legacy/incomplete compatibility only. Attempt reports are attempt-scoped and immutable: later attempts write to their own directories and must not overwrite earlier attempts.
+
+`FINAL_REPORT.md` is generated when `final-result.json` is persisted. The Final timeline row requires a real `final-result.json`; `FINAL_REPORT.md` alone does not create terminal state. `writeSessionReport()` may refresh existing attempt Markdown reports, but it must not invent `final-result.json` or fabricate a Final row.
+
+If Markdown report generation fails after the source JSON was persisted, the execution result and source JSON survive. The failure is represented by an explicit report-generation error artifact when possible, so normal terminal UI reporting does not silently fall back to raw JSON or claim a missing Markdown report exists.
+
+Legacy aggregate reports (`01_CODEX_REPORT.md`, `02_VALIDATION_REPORT.md`, and `03_REVIEW_REPORT.md`) may still be generated as compatibility summaries, but concrete timeline rows use per-attempt Markdown reports.
