@@ -4,13 +4,12 @@ body{display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden;backgrou
 header{border-bottom:1px solid #000;padding:5px 8px;white-space:nowrap;overflow:hidden;text-overflow:clip}
 main{min-height:0;overflow:hidden}
 .app-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px;padding:6px;height:100%;min-height:0;overflow:hidden}
-.setup-panel,.execution-panel,.run-panel,.view-panel,.output-panel{min-width:0;min-height:0;background:#fff;color:#000}
+.setup-panel,.execution-panel,.run-panel,.view-panel{min-width:0;min-height:0;background:#fff;color:#000}
 .setup-panel{border:1px solid #000;padding:6px;display:grid;grid-template-rows:auto auto auto auto minmax(90px,1fr) auto auto;gap:6px;min-height:0;overflow:hidden}
-.execution-panel{display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:6px;min-height:0;overflow:hidden}
-.run-panel,.view-panel,.output-panel{border:1px solid #000;overflow:hidden;padding:6px;display:flex;flex-direction:column;gap:6px}
+.execution-panel{display:grid;grid-template-rows:auto minmax(0,1fr);gap:6px;min-height:0;overflow:hidden}
+.run-panel,.view-panel{border:1px solid #000;overflow:hidden;padding:6px;display:flex;flex-direction:column;gap:6px}
 .run-panel{overflow:hidden}
 .view-panel{min-height:0}
-.output-panel{justify-content:flex-start}
 h2{margin:0;font-size:13px;line-height:1.2;font-weight:700}
 h3{margin:0 0 4px;font-size:12px;line-height:1.2}
 label{display:block;min-width:0}
@@ -37,20 +36,21 @@ button.primary:disabled{background:#fff;color:#555;border-color:#000}
 .timeline-wrap{min-height:0;overflow:auto;border-top:1px solid #ddd}
 .timeline-list{display:grid;min-width:0}
 .timeline-empty{padding:6px 2px;color:#444}
-.timeline-row{display:grid;grid-template-columns:24px minmax(100px,1fr) 100px 64px 56px;column-gap:8px;align-items:center;padding:3px 2px;border-bottom:1px solid #ddd;min-height:24px;font-size:12px;cursor:pointer}
+.timeline-row{display:grid;grid-template-columns:24px minmax(100px,1fr) 100px 64px 90px;column-gap:8px;align-items:center;padding:3px 2px;border-bottom:1px solid #ddd;min-height:24px;font-size:12px;cursor:pointer}
 .timeline-row.selected{background:#eef3ff;outline:1px solid #8aa4d6;outline-offset:-1px}
 .timeline-index,.timeline-status,.timeline-time{color:#333;white-space:nowrap}
 .timeline-step{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.step-copy{height:20px;padding:1px 5px;font-size:11px;cursor:pointer}
+.report-action{height:20px;padding:1px 5px;font-size:11px;cursor:pointer}
 #stepViewer{flex:1 1 auto;min-height:0;margin:0;border-top:1px solid #ddd;padding:6px 2px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;font:12px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace;background:#fff;color:#000}
-.output-file-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;align-items:center}
 #viewerTitle{min-width:0;white-space:normal;overflow-wrap:anywhere;word-break:break-word}
-.output-actions{display:flex;gap:4px;align-items:center}
-.output-actions button{height:24px;padding:2px 7px;font-size:12px}
 .completed,.failed,.rework,.running,.human_required,.cancelled,.pending,.final,.add,.del,.stopped{color:#000}
-@media (max-width:800px){.app-layout{grid-template-columns:minmax(0,1fr)}.branch-row{grid-template-columns:minmax(0,1fr)}.execution-panel{grid-template-rows:auto minmax(0,1fr) auto}}
+@media (max-width:800px){.app-layout{grid-template-columns:minmax(0,1fr)}.branch-row{grid-template-columns:minmax(0,1fr)}.execution-panel{grid-template-rows:auto minmax(0,1fr)}}
 .copy-unavailable{background:#f4f4f4;color:#555;border-color:#777}
 .copy-available{background:#000;color:#fff;border:2px solid #000;font-weight:bold}
 .copy-success{background:#fff;color:#000;border:2px solid #000;font-weight:bold;text-decoration:underline}
 .copy-error{background:#fff;color:#000;border:2px dashed #000;font-weight:bold}
 button.copy-available:disabled,button.copy-unavailable:disabled{background:#f4f4f4;color:#555;border:1px solid #777;font-weight:normal}
+
+.view-header{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;align-items:center}
+.manual-copy-overlay{position:fixed;inset:20px;background:#fff;border:2px solid #000;padding:8px;z-index:10;display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:6px}
+.manual-copy-overlay textarea{width:100%;height:100%;resize:none}

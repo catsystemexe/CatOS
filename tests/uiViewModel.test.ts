@@ -125,7 +125,7 @@ test("layout keeps actions visible, wraps long values, and prevents page scrolli
   expect(css).toContain(".app-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)");
   expect(css).toContain(".setup-panel{border:1px solid #000;padding:6px;display:grid;grid-template-rows:auto auto auto auto minmax(90px,1fr) auto auto");
   expect(css).toContain(
-    ".execution-panel{display:grid;grid-template-rows:auto minmax(0,1fr) auto"
+    ".execution-panel{display:grid;grid-template-rows:auto minmax(0,1fr)"
   );
   expect(css).toContain(".value-readout{display:block;white-space:normal;overflow-wrap:anywhere;word-break:break-word");
   expect(css).not.toContain("#viewer{");
@@ -162,17 +162,17 @@ test("STOP is phase-driven and terminal states do not return to running", async 
   expect(app).toContain("if(terminalPhases.has(phase)&&next==='running')return");
 });
 
-test("OUTPUT exposes only final report actions", async () => {
+test("VIEW exposes one COPY button and no OUTPUT panel", async () => {
   const { app, html } = await uiFiles();
-  expect(html).toContain("FINAL_REPORT.md");
+  expect(html).not.toContain('<section class="output-panel">');
   expect(html).toContain('id="copy" type="button" disabled>COPY');
-  expect(html).toContain('id="download" type="button" disabled>DOWNLOAD');
-  expect(app).toContain("latestSystem?.finalReport");
+  expect(html).not.toContain('id="download"');
+  expect(app).toContain("viewContent");
   expect(app).not.toContain("async function autoSelectOutput()");
   expect(app).not.toContain("viewerPath");
 });
 
-test("RUN and OUTPUT UI hide raw JSON and obsolete controls", async () => {
+test("RUN and VIEW UI hide raw JSON and obsolete controls", async () => {
   const { app, html, css } = await uiFiles();
   expect(html).not.toContain('id="technicalDetails"');
   expect(html).not.toContain('id="errorPanel"');
@@ -184,9 +184,9 @@ test("RUN and OUTPUT UI hide raw JSON and obsolete controls", async () => {
   expect(app).not.toContain("outputList");
   expect(app).toContain("data-step-path");
   expect(app).toContain("const available=!!rf?.exists&&!!rf?.readable&&!!rf?.path");
-  expect(app).toContain("copyButtonClass('step-copy',available)");
+  expect(app).toContain("report-action ${available?'copy-available':'copy-unavailable'}");
   expect(html).not.toContain("<table>");
   expect(html).toContain('<div id="timeline" class="timeline-list"');
-  expect(css).toContain(".timeline-row{display:grid;grid-template-columns:24px minmax(100px,1fr) 100px 64px 56px");
-  expect(css).toContain(".step-copy");
+  expect(css).toContain(".timeline-row{display:grid;grid-template-columns:24px minmax(100px,1fr) 100px 64px 90px");
+  expect(css).toContain(".report-action");
 });
