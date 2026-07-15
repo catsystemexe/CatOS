@@ -208,3 +208,11 @@ describe("ShellValidationRunner", () => {
     expect(JSON.stringify(report)).not.toContain("${name}");
     expect(report.results[0]?.exitCode).toBeNull();
   });
+
+  it("maps PASS + SKIPPED to PASS, FAIL dominates SKIPPED, and BLOCKED dominates SKIPPED without FAIL", async () => {
+    const runner = new ShellValidationRunner();
+    const skip: ValidationCommand = { name: "skip", command: "catos:skip:no npm script", required: true, timeoutMs: 1000 };
+    await expect(runner.run({ workspacePath: await workspace(), commands: [command("ok", "process.exit(0)"), skip] })).resolves.toMatchObject({ status: "PASS" });
+    await expect(runner.run({ workspacePath: await workspace(), commands: [command("fail", "process.exit(1)"), skip] })).resolves.toMatchObject({ status: "FAIL" });
+    await expect(runner.run({ workspacePath: await workspace(), commands: [missingCommand, skip] })).resolves.toMatchObject({ status: "BLOCKED" });
+  });

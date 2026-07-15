@@ -13,6 +13,7 @@ import type { FinalResult } from "../schemas/finalResult.js";
 import path from "node:path";
 import { artifactRefs, completeAttempt, createSession, startAttempt, appendTimelineEvent } from "../runs/sessionModel.js";
 import { assertWorkspaceBranch, resolveGitContext } from "../gitSession.js";
+import { collectWorkspaceDiffCheck } from "../gitWorkspaceState.js";
 
 type RunCliOptions = {
   cwd?: string;
@@ -149,6 +150,7 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
     return;
   }
   await appendTimelineEvent(run.runDir, { type: "git.run_branch_created", sessionId: run.runId, metadata: { baseBranch, baseCommit: git.baseCommit, runBranch, prTargetBranch } });
+  codingResult.diffCheck = await collectWorkspaceDiffCheck(codingResult.workspacePath);
   codingArtifacts = await writeCodingArtifacts(run.runDir, analysis.taskBrief, codingResult);
   let validationReport = await validationRunner.run({ workspacePath: codingResult.workspacePath, commands: validationCommands });
   let validationReportPath = await writeValidationReport(run.runDir, validationReport);
@@ -248,6 +250,7 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
       reworkPackage,
       sandboxMode: requestedSandboxMode,
     });
+    codingResult.diffCheck = await collectWorkspaceDiffCheck(codingResult.workspacePath);
     await writeCodingArtifacts(attemptDir, analysis.taskBrief, codingResult);
     validationReport = await validationRunner.run({ workspacePath: codingResult.workspacePath, commands: validationCommands });
     validationReportPath = await writeValidationReport(attemptDir, validationReport);

@@ -2,7 +2,7 @@ import { access, lstat, mkdir, open, realpath, stat, unlink, writeFile } from "n
 import type { ReworkPackage } from "./schemas/reworkPackage.js";
 import path from "node:path";
 import { execFile, fork } from "node:child_process";
-import { collectWorkspaceGitState } from "./gitWorkspaceState.js";
+import { collectWorkspaceGitState, type WorkspaceDiffCheck } from "./gitWorkspaceState.js";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -59,6 +59,7 @@ export type CodingResult = {
   status: string;
   sandboxMode: SandboxMode;
   sandboxIsolation: SandboxIsolation;
+  diffCheck?: WorkspaceDiffCheck;
 };
 
 export interface CodingWorker {
@@ -689,6 +690,7 @@ export class CodexSdkWorker implements CodingWorker {
       status: workspaceState.status,
       sandboxMode: input.sandboxMode,
       sandboxIsolation: input.sandboxIsolation,
+      diffCheck: workspaceState.diffCheck,
     };
   }
 
@@ -804,6 +806,7 @@ export async function writeCodingArtifacts(runDir: string, taskBrief: unknown, r
     finalResponse: result.finalResponse,
     sandboxMode: result.sandboxMode,
     sandboxIsolation: result.sandboxIsolation,
+    diffCheck: result.diffCheck,
   }, null, 2)}\n`, "utf8");
   await writeFile(diffPath, result.diff, "utf8");
   await writeFile(statusPath, result.status, "utf8");

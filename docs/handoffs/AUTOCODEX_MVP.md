@@ -138,9 +138,11 @@ Recommended statuses:
 - completed
 - failed
 - blocked
+- skipped
 - rework
 - human_required
 - stopped
+- accepted
 
 Completed is not merely “process exited”. Completed means the step completed its functional responsibility.
 
@@ -201,7 +203,7 @@ Check states:
 - SKIPPED
 - BLOCKED
 
-A no-op placeholder command must be reported as SKIPPED, never PASS.
+A no-op placeholder command must be reported as SKIPPED, never PASS. When no repository checks are configured, or every configured check is SKIPPED, the overall validation result is SKIPPED rather than failed. PASS plus SKIPPED with no failed or blocked required checks is PASS; FAIL dominates; BLOCKED dominates when no FAIL exists.
 
 Validation must distinguish repository checks from task acceptance. Generic repository validation does not prove the requested user output exists.
 
@@ -290,7 +292,7 @@ Required report filenames:
 
 Reports are MVP user-facing artifacts. They must be created from real source artifacts and must not use placeholders when source data exists.
 
-Path/token redaction must redact only actual sensitive values and absolute filesystem paths. It must not corrupt normal prose such as:
+Path/token redaction must redact only actual sensitive values and absolute filesystem paths, including internal run workspace roots in final model responses. Repository-relative paths and report filenames remain visible. It must not corrupt normal prose such as:
 
 - `workspace diff/status`
 - `input/output`
@@ -334,7 +336,7 @@ Create `docs/AUTOCODEX_E2E_TEST.md` with exact requested content and verify:
 
 - exact content,
 - exactly one changed file,
-- `git diff --check`.
+- `git diff --check` recorded by the coordinator, not inferred from Codex prose.
 
 ## 16. Known limitations
 
