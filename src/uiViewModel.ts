@@ -19,7 +19,7 @@ export type UiTimelineStatus =
 export type UiTimelineRow = {
   id: string;
   index: number;
-  name: "CODEX" | "VALIDATION" | "REVIEW";
+  name: "CODEX" | "VALIDATION" | "REVIEW" | "FINAL";
   label: string;
   status: UiTimelineStatus;
   startedAt?: string;
@@ -38,6 +38,12 @@ export type UiTimelineRow = {
     contentAvailable?: boolean;
   };
   artifactPath?: string;
+  report?: {
+    label: string;
+    path: string;
+    exists: boolean;
+    readable: boolean;
+  };
   resultFile?: {
     label: string;
     path: string;
@@ -258,6 +264,7 @@ function reviewMessage(verdict?: string, validation?: string) {
 
 export async function buildUiTimeline(
   runDir: string,
+  options: { includeFinal?: boolean } = {},
 ): Promise<UiTimelineRow[]> {
   const session = await readJson<Session>(path.join(runDir, "session.json"));
   if (!session) return [];
@@ -370,12 +377,32 @@ export async function buildUiTimeline(
       output: relToRun(runDir, review),
     },
   ];
+  if (options.includeFinal !== false) {
+    const final = await readJson<any>(path.join(runDir, "final-result.json"));
+    const runStatus = final?.status ? legacyStatus(final.status) : undefined;
+    rows.push({
+      id: "final",
+      index: 4,
+      name: "FINAL",
+      label: "FINAL",
+      status: runStatus === "completed" ? "completed" : runStatus === "failed" ? "failed" : runStatus === "stopped" ? "stopped" : runStatus === "human_required" ? "rework" : "waiting",
+      durationMs: final ? rows.reduce((total, row) => total + (row.durationMs ?? 0), 0) : undefined,
+      message: final?.terminalMessage,
+      output: relToRun(runDir, "FINAL_REPORT.md"),
+    });
+  }
   return Promise.all(
     rows.map(async (r) => {
-      const rel = `${String(r.index).padStart(2, "0")}_${r.name}.md`;
+      const rel = r.name === "FINAL" ? "FINAL_REPORT.md" : `${String(r.index).padStart(2, "0")}_${r.name}_REPORT.md`;
       const availability = await fileAvailability(path.join(runDir, rel));
       return {
         ...r,
+        report: {
+          label: rel,
+          path: rel,
+          exists: availability.exists,
+          readable: availability.readable,
+        },
         resultFile: {
           label: rel,
           path: rel,
