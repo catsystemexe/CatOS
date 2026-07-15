@@ -10,6 +10,8 @@ import { loadProjectConfig } from "../config/loadConfig.js";
 import { writeContinuePackage } from "../continuePackage.js";
 import {
   CodexSdkWorker,
+  buildReworkCodexInstruction,
+  sha256Text,
   writeCodingArtifacts,
   type CodingResult,
   type CodingWorker,
@@ -201,10 +203,8 @@ export async function runStepCommand(
   const promptPath =
     readOption(args, "--prompt-file") ?? generated.codexPromptPath;
 
-  // Keep this string byte-for-byte identical across:
-  // - continue/codex-prompt.md
-  // - attempt prompt.md
-  // - Codex runtime input
+  // The continue-package prompt remains derived rework guidance; the rendered Coding
+  // prompt below adds the original task verbatim as the authoritative section.
   const prompt = await readFile(promptPath, "utf8");
 
   const threadId = generated.package.execution.threadId;
@@ -212,14 +212,47 @@ export async function runStepCommand(
     ? "fake-child"
     : loaded.config.codex.sandboxMode;
 
+  const taskBrief = taskBriefForStep(step, prompt);
+  const reworkPackage = {
+    schemaVersion: 1 as const,
+    attempt: step.attempts.length + 1,
+    originalObjective: step.title,
+    acceptanceCriteria: [step.request],
+    blockingFindings: [
+      {
+        id: "run-step",
+        title: "Continue active step",
+        evidence: "Generated Continue Package",
+        requiredChange: prompt,
+      },
+    ],
+    preserve: ["Existing audited session artifacts."],
+    mustChange: [prompt],
+    mustNotChange: [
+      "Do not push, merge, or create a remote PR.",
+    ],
+    previousAttemptSummary:
+      "AutoCodex run-step continuation.",
+  };
+  const renderedPrompt = buildReworkCodexInstruction({ originalTask: taskInput.goal, taskBrief, reworkPackage, previousAttemptResult: generated.package.execution.reason, reviewVerdict: "REWORK" });
+
   const attempt = await startAttempt({
     runDir,
     step,
-    prompt,
+    prompt: renderedPrompt,
     runtimeMode,
   });
 
   const thisAttemptDir = attemptDir(runDir, step, attempt);
+  const instructionPath = path.join(thisAttemptDir, "coding-instruction.md");
+  await writeFile(instructionPath, renderedPrompt, "utf8");
+  const instructionMetadata = {
+    instructionArtifactPath: path.relative(runDir, instructionPath),
+    originalTaskLength: Buffer.byteLength(taskInput.goal, "utf8"),
+    originalTaskSha256: sha256Text(taskInput.goal),
+    renderedInstructionSha256: sha256Text(renderedPrompt),
+    attemptNumber: attempt.order,
+  };
 
   const workspacePath =
     session.workspacePath ?? generated.package.session.workspacePath;
@@ -249,7 +282,6 @@ export async function runStepCommand(
   );
 
   const reviewerProvider = options.reviewerProvider;
-  const taskBrief = taskBriefForStep(step, prompt);
 
   try {
     const codingWorker = options.codingWorker ?? new CodexSdkWorker();
@@ -261,44 +293,23 @@ export async function runStepCommand(
         effectiveWorkspacePath,
         thisAttemptDir,
       );
-    } else if (codingWorker.continueInstruction) {
-      codingResult = await codingWorker.continueInstruction({
-        threadId,
-        instruction: prompt,
-        workspacePath: effectiveWorkspacePath,
-        workspaceRoot,
-        sandboxMode: loaded.config.codex.sandboxMode,
-      });
     } else {
       codingResult = await codingWorker.continueTask({
+        originalTask: taskInput.goal,
+        taskBrief,
         threadId: threadId ?? "",
         workspacePath: effectiveWorkspacePath,
         workspaceRoot,
-        reworkPackage: {
-          schemaVersion: 1,
-          attempt: attempt.order,
-          originalObjective: step.title,
-          acceptanceCriteria: [step.request],
-          blockingFindings: [
-            {
-              id: "run-step",
-              title: "Continue active step",
-              evidence: "Generated Continue Package",
-              requiredChange: prompt,
-            },
-          ],
-          preserve: ["Existing audited session artifacts."],
-          mustChange: [prompt],
-          mustNotChange: [
-            "Do not push, merge, or create a remote PR.",
-          ],
-          previousAttemptSummary:
-            "AutoCodex run-step continuation.",
-        },
+        reworkPackage,
         sandboxMode: loaded.config.codex.sandboxMode,
+        approvalPolicy: "never",
+        attemptNumber: attempt.order,
+        previousAttemptResult: generated.package.execution.reason,
+        reviewVerdict: "REWORK",
       });
     }
 
+    Object.assign(codingResult, instructionMetadata);
     const codingArtifacts = await writeCodingArtifacts(
       thisAttemptDir,
       taskBrief,

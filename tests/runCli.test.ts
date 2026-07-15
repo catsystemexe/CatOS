@@ -1,5 +1,6 @@
 import { mkdtemp, mkdir, readFile, writeFile, readdir } from "node:fs/promises";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
@@ -83,7 +84,7 @@ describe("runCommand", () => {
     const validationCalls: string[] = [];
     const codingWorker: CodingWorker = {
       executeTask: async (input) => {
-        calls.push(`${input.instruction}|${input.sandboxMode}`);
+        calls.push(`${input.originalTask}|${input.taskBrief.codexInstruction}|${input.sandboxMode}|${input.attemptNumber}`);
         return {
           threadId: "thread-cli",
           finalResponse: "fake worker done",
@@ -142,7 +143,7 @@ describe("runCommand", () => {
     expect(runDirs).toHaveLength(1);
     const taskBrief = JSON.parse(await readFile(path.join(runsDir, runDirs[0]!, "task-brief.json"), "utf8"));
     expect(taskBriefSchema.parse(taskBrief)).toEqual(brief);
-    expect(calls).toEqual([`${brief.codexInstruction}|workspace-write`]);
+    expect(calls).toEqual([`Test task|${brief.codexInstruction}|workspace-write|1`]);
     const codingResult = JSON.parse(await readFile(path.join(runsDir, runDirs[0]!, "coding-result.json"), "utf8"));
     expect(codingResult.changedFiles).toEqual(["README.md"]);
     expect(codingResult.sandboxMode).toBe("workspace-write");
@@ -191,7 +192,67 @@ describe("runCommand", () => {
       },
     });
   });
+
+  it("passes the full literal original task and derived TaskBrief separately to Coding and writes instruction audit metadata", async () => {
+    const originalTask = [
+      "Create exactly one file:",
+      "",
+      "docs/AUTOCODEX_UI_DEMO.md",
+      "",
+      "The file content must be exactly the text inside the BEGIN/END markers.",
+      "Do not include the markers themselves.",
+      "",
+      "BEGIN FILE CONTENT",
+      "# AutoCodex UI Demo",
+      "",
+      "Status: passed",
+      "Purpose: verify task integrity",
+      "Literal: `preserve this`",
+      "END FILE CONTENT",
+    ].join("\n");
+    const previousSecret = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "controlled-fake-openai-secret-task-integrity";
+    try {
+      const driftedBrief: TaskBrief = { ...brief, codexInstruction: "Create the requested documentation file." };
+      const { cwd, runsDir } = await setupRunFixture();
+      const provider: TaskAnalystProvider = { analyze: async () => driftedBrief };
+      let receivedOriginalTask = "";
+      let receivedTaskBrief: TaskBrief | undefined;
+      const codingWorker: CodingWorker = {
+        executeTask: async (input) => {
+          receivedOriginalTask = input.originalTask;
+          receivedTaskBrief = input.taskBrief;
+          return codingResult("thread-1", await createMockWorkspace(input), "initial");
+        },
+        continueTask: async () => { throw new Error("rework must not run"); },
+      };
+      const reviewerProvider: ReviewerProvider = { review: async () => review("ACCEPT") };
+      await runCommand(["--project", "demo", "--task", originalTask], { cwd, runsDir, taskAnalystProvider: provider, codingWorker, validationRunner: validationRunnerWith(["PASS"]), reviewerProvider });
+      const [runId] = await readdir(runsDir);
+      const runDir = path.join(runsDir, runId!);
+      expect(receivedOriginalTask).toBe(originalTask);
+      expect(receivedTaskBrief).toEqual(driftedBrief);
+      const instruction = await readFile(path.join(runDir, "coding-instruction.md"), "utf8");
+      expect(instruction).toContain(originalTask);
+      expect(instruction.indexOf("## Original user task — verbatim")).toBeLessThan(instruction.indexOf("## Derived implementation guidance"));
+      expect(instruction).toContain("## Derived implementation guidance\n\nCreate the requested documentation file.");
+      expect(instruction).not.toContain("controlled-fake-openai-secret-task-integrity");
+      expect(instruction).not.toContain("Authorization:");
+      const coding = JSON.parse(await readFile(path.join(runDir, "coding-result.json"), "utf8"));
+      expect(coding.instructionArtifactPath).toBe("coding-instruction.md");
+      expect(coding.originalTaskLength).toBe(Buffer.byteLength(originalTask, "utf8"));
+      expect(coding.originalTaskSha256).toBe(createHash("sha256").update(originalTask, "utf8").digest("hex"));
+      expect(coding.renderedInstructionSha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(coding.attemptNumber).toBe(1);
+      expect(path.isAbsolute(coding.instructionArtifactPath)).toBe(false);
+      const steps = await readdir(path.join(runDir, "steps"));
+      const attempts = await readdir(path.join(runDir, "steps", steps[0]!, "attempts"));
+      await expect(readFile(path.join(runDir, "steps", steps[0]!, "attempts", attempts[0]!, "coding-instruction.md"), "utf8")).resolves.toBe(instruction);
+    } finally {
+      if (previousSecret === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previousSecret;
+    }
   });
+});
 type ReviewVerdict = "ACCEPT" | "REWORK" | "HUMAN_REQUIRED";
 
 async function setupRunFixture(maxReworkAttempts = 2) {
@@ -321,6 +382,9 @@ describe("runCommand rework loop", () => {
     const [runId] = await readdir(runsDir);
     const runDir = path.join(runsDir, runId!);
     expect(continueInputs).toHaveLength(1);
+    expect(continueInputs[0]!.originalTask).toBe("Test task");
+    expect(continueInputs[0]!.taskBrief).toEqual(brief);
+    expect(continueInputs[0]!.attemptNumber).toBe(2);
     expect(continueInputs[0]!.threadId).toBe("thread-1");
     expect(continueInputs[0]!.workspacePath).toContain(path.join(runId!, "workspace"));
     expect(validationCalls).toHaveLength(2);
@@ -345,6 +409,19 @@ describe("runCommand rework loop", () => {
     const steps = await readdir(path.join(runDir, "steps"));
     const sessionAttempts = await readdir(path.join(runDir, "steps", steps[0]!, "attempts"));
     expect(sessionAttempts).toHaveLength(2);
+    const attemptOneInstruction = await readFile(path.join(runDir, "steps", steps[0]!, "attempts", sessionAttempts[0]!, "coding-instruction.md"), "utf8");
+    const attemptTwoInstruction = await readFile(path.join(runDir, "steps", steps[0]!, "attempts", sessionAttempts[1]!, "coding-instruction.md"), "utf8");
+    expect(attemptOneInstruction).toContain("Test task");
+    expect(attemptTwoInstruction).toContain("Test task");
+    expect(attemptTwoInstruction).toContain("## Review verdict");
+    expect(attemptTwoInstruction).toContain("## Required changes");
+    expect(attemptTwoInstruction).toContain("Change finding-1");
+    expect(attemptTwoInstruction).not.toBe("Change finding-1");
+    const initialCodingResult = JSON.parse(await readFile(path.join(runDir, "coding-result.json"), "utf8"));
+    const reworkCodingResult = JSON.parse(await readFile(path.join(runDir, "attempts", "01", "coding-result.json"), "utf8"));
+    expect(initialCodingResult.originalTaskSha256).toBe(reworkCodingResult.originalTaskSha256);
+    expect(initialCodingResult.renderedInstructionSha256).not.toBe(reworkCodingResult.renderedInstructionSha256);
+    expect(path.isAbsolute(reworkCodingResult.instructionArtifactPath)).toBe(false);
   });
 
   it("stops after rework returns HUMAN_REQUIRED", async () => {

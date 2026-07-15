@@ -1,5 +1,7 @@
 import { access, lstat, mkdir, open, realpath, stat, unlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import type { ReworkPackage } from "./schemas/reworkPackage.js";
+import type { TaskBrief } from "./schemas/taskBrief.js";
 import path from "node:path";
 import { execFile, fork } from "node:child_process";
 import { collectWorkspaceGitState, type WorkspaceDiffCheck } from "./gitWorkspaceState.js";
@@ -23,7 +25,8 @@ export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access"
 export type SandboxIsolation = "enabled" | "disabled";
 
 export type CodingTask = {
-  instruction: string;
+  originalTask: string;
+  taskBrief: TaskBrief;
   repositoryPath: string;
   baseBranch: string;
   baseCommit?: string;
@@ -32,19 +35,27 @@ export type CodingTask = {
   runId: string;
   workspaceRoot: string;
   sandboxMode?: SandboxMode;
+  approvalPolicy?: "never";
+  attemptNumber?: number;
 };
 
 export type ReworkCodingTask = {
+  originalTask: string;
+  taskBrief: TaskBrief;
   threadId: string;
   workspacePath: string;
   workspaceRoot: string;
   reworkPackage: ReworkPackage;
   sandboxMode?: SandboxMode;
+  approvalPolicy?: "never";
+  attemptNumber: number;
+  previousAttemptResult?: string;
+  reviewVerdict?: string;
 };
 
-export type ContinueCodingTask = {
+type RenderedInstructionTask = {
   threadId?: string;
-  instruction: string;
+  renderedInstruction: string;
   workspacePath: string;
   workspaceRoot: string;
   sandboxMode?: SandboxMode;
@@ -60,12 +71,16 @@ export type CodingResult = {
   sandboxMode: SandboxMode;
   sandboxIsolation: SandboxIsolation;
   diffCheck?: WorkspaceDiffCheck;
+  instructionArtifactPath?: string;
+  originalTaskLength?: number;
+  originalTaskSha256?: string;
+  renderedInstructionSha256?: string;
+  attemptNumber?: number;
 };
 
 export interface CodingWorker {
   executeTask(input: CodingTask): Promise<CodingResult>;
   continueTask(input: ReworkCodingTask): Promise<CodingResult>;
-  continueInstruction?(input: ContinueCodingTask): Promise<CodingResult>;
 }
 
 type GitResult = { stdout: string; stderr: string };
@@ -348,59 +363,147 @@ export async function buildIsolatedWorkspacePath(input: { workspaceRoot: string;
   return workspacePath;
 }
 
-export function buildCodexInstruction(instruction: string): string {
+type TaskBriefWithOptionalFields = TaskBrief & { expectedFiles?: unknown; constraints?: unknown };
+
+function linesOrDash(items: string[] | undefined, empty = "- none"): string[] {
+  return items && items.length > 0 ? items.map((item) => `- ${item}`) : [empty];
+}
+
+function stringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.length > 0) : undefined;
+}
+
+function constraintsForTaskBrief(taskBrief: TaskBriefWithOptionalFields): string[] {
+  const explicit = stringArray(taskBrief.constraints);
   return [
-    "You are the CatOS Codex Worker executing a TaskBrief.codexInstruction.",
+    ...(explicit ?? []),
+    `riskLevel: ${taskBrief.riskLevel}`,
+  ];
+}
+
+function taskBriefSummary(taskBrief: TaskBriefWithOptionalFields): string[] {
+  return [
+    `Objective: ${taskBrief.objective}`,
     "",
-    "Safety rules:",
+    "Derived implementation guidance:",
+    taskBrief.codexInstruction,
+    "",
+    "Acceptance criteria:",
+    ...linesOrDash(taskBrief.acceptanceCriteria),
+    "",
+    "Expected files:",
+    ...linesOrDash(stringArray(taskBrief.expectedFiles)),
+    "",
+    "Non-goals:",
+    ...linesOrDash(taskBrief.nonGoals),
+    "",
+    "Constraints:",
+    ...linesOrDash(constraintsForTaskBrief(taskBrief)),
+  ];
+}
+
+export function sha256Text(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+export function buildCodexInstruction(input: { originalTask: string; taskBrief: TaskBrief }): string {
+  const taskBrief = input.taskBrief as TaskBriefWithOptionalFields;
+  return [
+    "# Coding task",
+    "",
+    "## Original user task — verbatim",
+    "",
+    input.originalTask,
+    "",
+    "## Derived implementation guidance",
+    "",
+    taskBrief.codexInstruction,
+    "",
+    "## Acceptance criteria",
+    "",
+    ...linesOrDash(taskBrief.acceptanceCriteria),
+    "",
+    "## Expected files",
+    "",
+    ...linesOrDash(stringArray(taskBrief.expectedFiles)),
+    "",
+    "## Non-goals",
+    "",
+    ...linesOrDash(taskBrief.nonGoals),
+    "",
+    "## Constraints",
+    "",
+    ...linesOrDash(constraintsForTaskBrief(taskBrief)),
+    "",
+    "## Execution rules",
+    "",
+    "- The Original user task section is authoritative for literal requirements. Derived guidance and acceptance criteria are additive and must not replace or alter explicit content, filenames, markers, formatting requirements, or exact file contents stated in the original task.",
+    "- If derived guidance conflicts with an explicit literal requirement in the Original user task section, preserve the original literal requirement and report the conflict instead of silently changing or omitting it.",
     "- Modify only files inside the provided Git worktree workspace.",
     "- Do not change files outside the worktree.",
     "- Do not create commits, push, merge, or rebase.",
     "- Do not add secrets, credentials, API keys, tokens, or private data.",
-    "- Do not do work outside the scope of the TaskBrief.",
     "- You may run reasonable local commands to inspect or support your implementation, but CatOS will not treat them as a verification gate in this stage.",
-    "",
-    "TaskBrief.codexInstruction:",
-    instruction,
   ].join("\n");
 }
 
-
-export function buildReworkCodexInstruction(reworkPackage: ReworkPackage): string {
+export function buildReworkCodexInstruction(input: { originalTask: string; taskBrief: TaskBrief; reworkPackage: ReworkPackage; previousAttemptResult?: string; reviewVerdict?: string }): string {
+  const taskBrief = input.taskBrief as TaskBriefWithOptionalFields;
   return [
-    "You are continuing the same CatOS Codex Worker thread for a bounded rework attempt.",
+    "# Coding rework task",
     "",
-    "Safety rules:",
-    "- Continue working in the same Git worktree workspace already provided to this thread.",
-    "- Modify only files inside that workspace.",
-    "- Do not change files outside the workspace.",
-    "- Do not create commits, push, merge, or rebase.",
-    "- Do not add secrets, credentials, API keys, tokens, or private data.",
-    "- Make only the specific required changes below and preserve already satisfied behavior.",
+    "## Original user task — verbatim",
     "",
-    `Rework attempt: ${reworkPackage.attempt}`,
-    `Original objective: ${reworkPackage.originalObjective}`,
+    input.originalTask,
     "",
-    "Acceptance criteria:",
-    ...reworkPackage.acceptanceCriteria.map((criterion) => `- ${criterion}`),
+    "## Existing derived task brief",
     "",
-    "Blocking findings to fix:",
-    ...reworkPackage.blockingFindings.map((finding) => [
+    ...taskBriefSummary(taskBrief),
+    "",
+    "## Previous attempt result",
+    "",
+    input.previousAttemptResult ?? input.reworkPackage.previousAttemptSummary,
+    "",
+    "## Review verdict",
+    "",
+    input.reviewVerdict ?? "REWORK",
+    "",
+    "## Blocking findings",
+    "",
+    ...input.reworkPackage.blockingFindings.map((finding) => [
       `- ${finding.id}: ${finding.title}`,
       `  Evidence: ${finding.evidence}`,
       `  Required change: ${finding.requiredChange}`,
     ].join("\n")),
     "",
-    "Must change:",
-    ...reworkPackage.mustChange.map((item) => `- ${item}`),
+    "## Required changes",
     "",
-    "Preserve:",
-    ...(reworkPackage.preserve.length > 0 ? reworkPackage.preserve.map((item) => `- ${item}`) : ["- Preserve all behavior unrelated to the blocking findings."]),
+    ...linesOrDash(input.reworkPackage.mustChange),
     "",
-    "Must not change:",
-    ...(reworkPackage.mustNotChange.length > 0 ? reworkPackage.mustNotChange.map((item) => `- ${item}`) : ["- Do not expand scope beyond the original TaskBrief."]),
+    "## Acceptance criteria",
     "",
-    `Previous attempt summary: ${reworkPackage.previousAttemptSummary}`,
+    ...linesOrDash(input.reworkPackage.acceptanceCriteria),
+    "",
+    "## Constraints",
+    "",
+    ...linesOrDash([
+      ...constraintsForTaskBrief(taskBrief),
+      ...input.reworkPackage.mustNotChange,
+      "Review findings are additive rework guidance and do not replace the Original user task section.",
+      "If a Review instruction conflicts with an explicit literal requirement from the Original user task section, preserve the original literal requirement while resolving or reporting the conflict.",
+    ]),
+    "",
+    "## Preserve",
+    "",
+    ...linesOrDash(input.reworkPackage.preserve, "- Preserve all behavior unrelated to the blocking findings."),
+    "",
+    "## Execution rules",
+    "",
+    "- Continue working in the same Git worktree workspace already provided to this thread.",
+    "- Modify only files inside that workspace.",
+    "- Do not change files outside the workspace.",
+    "- Do not create commits, push, merge, or rebase.",
+    "- Do not add secrets, credentials, API keys, tokens, or private data.",
   ].join("\n");
 }
 
@@ -726,6 +829,7 @@ export class CodexSdkWorker implements CodingWorker {
     const writeProbe = await probeWorkspaceWritable({ workspacePath: guarded.workspacePath, workspaceRoot: guarded.workspaceRoot, repositoryPath, runId: input.runId, git: this.git, openFile: this.workspaceProbeOpen });
     const runtime = await prepareRuntime({ workspacePath: guarded.workspacePath, workspaceRoot: guarded.workspaceRoot, sandboxMode, sandboxIsolation, probe: writeProbe.probe });
     const model = process.env.CATOS_CODEX_MODEL;
+    const renderedInstruction = buildCodexInstruction({ originalTask: input.originalTask, taskBrief: input.taskBrief });
     const runtimeResult = await this.codexRuntimeRunner({
       env: runtime.env,
       cwd: guarded.workspacePath,
@@ -734,9 +838,9 @@ export class CodexSdkWorker implements CodingWorker {
         mode: "start",
         workingDirectory: guarded.workspacePath,
         sandboxMode,
-        approvalPolicy: "never",
+        approvalPolicy: input.approvalPolicy ?? "never",
         ...(model ? { model } : {}),
-        instruction: buildCodexInstruction(input.instruction),
+        instruction: renderedInstruction,
       },
     });
 
@@ -751,16 +855,22 @@ export class CodexSdkWorker implements CodingWorker {
   }
 
   async continueTask(input: ReworkCodingTask): Promise<CodingResult> {
-    return await this.continueInstruction({
+    return await this.runRenderedInstruction({
       threadId: input.threadId,
-      instruction: buildReworkCodexInstruction(input.reworkPackage),
+      renderedInstruction: buildReworkCodexInstruction({
+        originalTask: input.originalTask,
+        taskBrief: input.taskBrief,
+        reworkPackage: input.reworkPackage,
+        previousAttemptResult: input.previousAttemptResult,
+        reviewVerdict: input.reviewVerdict,
+      }),
       workspacePath: input.workspacePath,
       workspaceRoot: input.workspaceRoot,
       sandboxMode: input.sandboxMode,
     });
   }
 
-  async continueInstruction(input: ContinueCodingTask): Promise<CodingResult> {
+  private async runRenderedInstruction(input: RenderedInstructionTask): Promise<CodingResult> {
     const sandboxMode = input.sandboxMode ?? "workspace-write";
     const sandboxIsolation = sandboxMode === "danger-full-access" ? "disabled" : "enabled";
     const guarded = await guardCodexWorkspace({ workspacePath: input.workspacePath, workspaceRoot: input.workspaceRoot, catosRoot: this.catosRoot });
@@ -777,7 +887,7 @@ export class CodexSdkWorker implements CodingWorker {
         sandboxMode,
         approvalPolicy: "never",
         ...(model ? { model } : {}),
-        instruction: input.instruction,
+        instruction: input.renderedInstruction,
       },
     });
     await updateRuntimeManifestFromResult(runtime.runtimeDir, runtimeResult);
@@ -807,6 +917,11 @@ export async function writeCodingArtifacts(runDir: string, taskBrief: unknown, r
     sandboxMode: result.sandboxMode,
     sandboxIsolation: result.sandboxIsolation,
     diffCheck: result.diffCheck,
+    instructionArtifactPath: result.instructionArtifactPath,
+    originalTaskLength: result.originalTaskLength,
+    originalTaskSha256: result.originalTaskSha256,
+    renderedInstructionSha256: result.renderedInstructionSha256,
+    attemptNumber: result.attemptNumber,
   }, null, 2)}\n`, "utf8");
   await writeFile(diffPath, result.diff, "utf8");
   await writeFile(statusPath, result.status, "utf8");
