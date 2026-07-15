@@ -455,9 +455,12 @@ test("REVIEW report separates expected files from acceptance criteria", async ()
   );
   await writeSessionReport(f.runDir);
   const md = await readFile(path.join(f.runDir, "03_REVIEW_REPORT.md"), "utf8");
-  expect(md).toContain("## Expected files\n- docs/AUTOCODEX_E2E_TEST.md");
   expect(md).toContain(
-    "## Acceptance criteria\n- file exists\n- content matches",
+    "## Expected files\n- docs/AUTOCODEX_E2E_TEST.md",
+  );
+
+  expect(md).toContain(
+    "## Acceptance criteria\n- docs/AUTOCODEX_E2E_TEST.md exists",
   );
 });
 
