@@ -25,3 +25,9 @@ for (const [status, verdict] of [["ACCEPTED","ACCEPT"],["HUMAN_REQUIRED","HUMAN_
 test("safe report output access rejects traversal and reads selected report", async()=>{ const f=await fixture(); await writeBase(f); await writeFinalResult(f.runDir,{schemaVersion:1,runId:"run-1",status:"ACCEPTED",terminalMessage:"TASK COMPLETE",error:null,finalReviewVerdict:"ACCEPT",totalCodingAttempts:1,reworkAttempts:0,finalWorkspacePath:f.ws,finalChangedFiles:[],finalValidationStatus:"PASS",finalReviewReportPath:path.join(f.attemptDir,"review-report.json"),outputs:[]}); await expect(readRunOutput("run-1","../secret",{cwd:f.root,runsDir:path.join(f.root,"runs")})).rejects.toThrow("Path traversal rejected"); await expect(readRunOutput("run-1","01_CODEX_REPORT.md",{cwd:f.root,runsDir:path.join(f.root,"runs")})).resolves.toMatchObject({path:"01_CODEX_REPORT.md"}); });
 
 test("terminal result availability is checked from files", async()=>{ const f=await fixture(); await writeBase(f); await writeSessionReport(f.runDir); await rm(path.join(f.runDir,"02_VALIDATION_REPORT.md")); const s=await buildUiSystemState(f.runDir); expect(s.steps.map(r=>r.report)).toEqual([{label:"01_CODEX_REPORT.md",path:"01_CODEX_REPORT.md",exists:true,readable:true},{label:"02_VALIDATION_REPORT.md",path:"02_VALIDATION_REPORT.md",exists:false,readable:false},{label:"03_REVIEW_REPORT.md",path:"03_REVIEW_REPORT.md",exists:true,readable:true},{label:"FINAL_REPORT.md",path:"FINAL_REPORT.md",exists:true,readable:true}]); });
+
+test("UI-started RUN requests Replit-compatible Codex runtime mode", async () => {
+  const api = await readFile(new URL("../src/uiApi.ts", import.meta.url), "utf8");
+  expect(api).toContain('"--sandbox-mode","danger-full-access"');
+  expect(api).toContain('"--pr-target",prTarget,"--sandbox-mode","danger-full-access"');
+});

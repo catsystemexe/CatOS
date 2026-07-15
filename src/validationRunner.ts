@@ -16,7 +16,7 @@ export type ValidationCommandResult = {
   name: string;
   command: string;
   required: boolean;
-  status: "PASS" | "FAIL" | "BLOCKED";
+  status: "PASS" | "FAIL" | "SKIPPED" | "BLOCKED";
   exitCode: number | null;
   signal: string | null;
   stdout: string;
@@ -27,7 +27,7 @@ export type ValidationCommandResult = {
 
 export type ValidationReport = {
   schemaVersion: 1;
-  status: "PASS" | "FAIL" | "BLOCKED";
+  status: "PASS" | "FAIL" | "SKIPPED" | "BLOCKED";
   workspacePath: string;
   startedAt: string;
   finishedAt: string;
@@ -92,9 +92,20 @@ export function buildValidationCommands(
 
 function computeStatus(results: ValidationCommandResult[]): ValidationReport["status"] {
   const requiredResults = results.filter((result) => result.required);
-  if (requiredResults.some((result) => result.status === "BLOCKED")) return "BLOCKED";
+  if (requiredResults.length === 0) return "SKIPPED";
   if (requiredResults.some((result) => result.status === "FAIL")) return "FAIL";
-  return "PASS";
+  if (requiredResults.some((result) => result.status === "BLOCKED")) return "BLOCKED";
+  if (requiredResults.every((result) => result.status === "SKIPPED")) return "SKIPPED";
+  if (requiredResults.every((result) => result.status === "PASS" || result.status === "SKIPPED")) return "PASS";
+  return "BLOCKED";
+}
+
+function skippedResult(command: ValidationCommand): ValidationCommandResult {
+  return { name: command.name, command: command.command, required: command.required, status: "SKIPPED", exitCode: null, signal: null, stdout: "", stderr: "Validation check skipped: command is not configured.", durationMs: 0, timedOut: false };
+}
+
+function isSkipCommand(command: ValidationCommand): boolean {
+  return /^catos:skip(?::|$)/.test(command.command);
 }
 
 function isCommandNotFound(exitCode: number | null, stderr: string): boolean {
@@ -241,7 +252,7 @@ export class ShellValidationRunner implements ValidationRunner {
     }
 
     for (const command of input.commands) {
-      results.push(await runOneCommand(workspacePath, command));
+      results.push(isSkipCommand(command) ? skippedResult(command) : await runOneCommand(workspacePath, command));
     }
 
     const finishedAt = new Date().toISOString();

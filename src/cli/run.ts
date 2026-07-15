@@ -70,6 +70,7 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
   const baseBranch = readOption(args, "--base-branch") ?? loaded.config.project.baseBranch;
   if (!baseBranch) throw new Error("Missing base branch: pass --base-branch or set project.baseBranch in config.");
   const prTargetBranch = readOption(args, "--pr-target") ?? loaded.config.git.prTargetBranch ?? baseBranch;
+  const requestedSandboxMode = (readOption(args, "--sandbox-mode") as any) ?? loaded.config.codex.sandboxMode;
   const workspaceRoot = resolveWorkspaceRoot(loaded.config.execution.workspaceRoot);
   const run = await createRun(projectId!, goal, configPath, { runsDir: options.runsDir });
   await writeFile(run.inputPath, `${JSON.stringify({ ...run.input, repositoryPath: loaded.absoluteRepoPath, baseBranch, prTargetBranch, configSource }, null, 2)}\n`, "utf8");
@@ -87,21 +88,68 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
   const maxReworkAttempts = loaded.config.workflow.maxReworkAttempts;
 
   let currentStep = sessionState.step;
-  let currentAttempt = await startAttempt({ runDir: run.runDir, step: currentStep, prompt: analysis.taskBrief.codexInstruction, runtimeMode: loaded.config.codex.sandboxMode });
+  let currentAttempt = await startAttempt({ runDir: run.runDir, step: currentStep, prompt: analysis.taskBrief.codexInstruction, runtimeMode: requestedSandboxMode });
 
-  let codingResult = await codingWorker.executeTask({
-    instruction: analysis.taskBrief.codexInstruction,
-    repositoryPath: loaded.absoluteRepoPath,
-    baseBranch,
-    baseCommit: git.baseCommit,
-    runBranch,
-    workspacePath,
-    runId: run.runId,
-    workspaceRoot,
-    sandboxMode: loaded.config.codex.sandboxMode,
-  });
+  let codingResult;
+  let codingArtifacts;
+  try {
+    codingResult = await codingWorker.executeTask({
+      instruction: analysis.taskBrief.codexInstruction,
+      repositoryPath: loaded.absoluteRepoPath,
+      baseBranch,
+      baseCommit: git.baseCommit,
+      runBranch,
+      workspacePath,
+      runId: run.runId,
+      workspaceRoot,
+      sandboxMode: requestedSandboxMode,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    codingResult = {
+      threadId: "runtime-error",
+      finalResponse: message,
+      workspacePath,
+      changedFiles: [],
+      diff: "",
+      status: "",
+      sandboxMode: requestedSandboxMode,
+      sandboxIsolation: requestedSandboxMode === "danger-full-access" ? "disabled" as const : "enabled" as const,
+    };
+    codingArtifacts = await writeCodingArtifacts(run.runDir, analysis.taskBrief, codingResult);
+    await completeAttempt({
+      runDir: run.runDir,
+      step: currentStep,
+      attempt: currentAttempt,
+      status: "failed",
+      codexThreadId: codingResult.threadId,
+      resultStatus: "runtime-error",
+      changedFiles: [],
+      errorSummary: message,
+      workspacePath: codingResult.workspacePath,
+      artifacts: artifactRefs(run.runDir, {
+        codingResultPath: codingArtifacts.codingResultPath,
+        diffPath: codingArtifacts.diffPath,
+        statusPath: codingArtifacts.statusPath,
+        taskBriefPath: codingArtifacts.taskBriefPath,
+        runtimeDir: path.join(path.dirname(codingResult.workspacePath), "runtime"),
+        runtimeManifestPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "runtime.json"),
+        runtimeStdoutPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "codex-runtime.stdout.log"),
+        runtimeStderrPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "codex-runtime.stderr.log"),
+        runtimeErrorPath: path.join(path.dirname(codingResult.workspacePath), "runtime", "codex-runtime-error.json"),
+      }),
+    });
+    const finalResult: FinalResult = { schemaVersion: 1, runId: run.runId, status: "failed", terminalMessage: "TASK FAILED", error: { code: "codex_runtime_failed", message, stepId: currentStep.stepId }, workspacePath: codingResult.workspacePath, changedFiles: [], outputs: [], finalResponse: codingResult.finalResponse, finalReviewVerdict: "HUMAN_REQUIRED", totalCodingAttempts: 1, reworkAttempts: 0, finalWorkspacePath: codingResult.workspacePath, finalChangedFiles: [], finalValidationStatus: "BLOCKED", finalReviewReportPath: "review-report.json", finalDiffPath: codingArtifacts.diffPath, finalValidationReportPath: "validation-report.json" };
+    const finalResultPath = await writeFinalResult(run.runDir, finalResult);
+    console.log("CatOS run created");
+    console.log(`Run ID: ${run.runId}`);
+    console.log(`Codex sandbox mode: ${codingResult.sandboxMode} (isolation: ${codingResult.sandboxIsolation})`);
+    console.log(`Final status: ${finalResult.status}`);
+    console.log(`Final result: ${finalResultPath}`);
+    return;
+  }
   await appendTimelineEvent(run.runDir, { type: "git.run_branch_created", sessionId: run.runId, metadata: { baseBranch, baseCommit: git.baseCommit, runBranch, prTargetBranch } });
-  const codingArtifacts = await writeCodingArtifacts(run.runDir, analysis.taskBrief, codingResult);
+  codingArtifacts = await writeCodingArtifacts(run.runDir, analysis.taskBrief, codingResult);
   let validationReport = await validationRunner.run({ workspacePath: codingResult.workspacePath, commands: validationCommands });
   let validationReportPath = await writeValidationReport(run.runDir, validationReport);
   await completeAttempt({
@@ -144,7 +192,7 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
     projectConstraints: {
       permissions: loaded.config.permissions,
       workflow: loaded.config.workflow,
-      codex: loaded.config.codex,
+      codex: { ...loaded.config.codex, sandboxMode: requestedSandboxMode },
     },
   }, { provider: options.reviewerProvider });
   let reviewReportPath = await writeReviewReport(run.runDir, reviewReport);
@@ -191,14 +239,14 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
     const beforeReview = reviewReport;
     const beforeValidationStatus = validationReport.status;
     currentStep = await import("../runs/sessionModel.js").then(m => m.loadStep(run.runDir, currentStep.stepId));
-    currentAttempt = await startAttempt({ runDir: run.runDir, step: currentStep, prompt: reworkPackage.mustChange.join("\n"), runtimeMode: loaded.config.codex.sandboxMode });
+    currentAttempt = await startAttempt({ runDir: run.runDir, step: currentStep, prompt: reworkPackage.mustChange.join("\n"), runtimeMode: requestedSandboxMode });
     await assertWorkspaceBranch(run.runDir);
     codingResult = await codingWorker.continueTask({
       threadId: codingResult.threadId,
       workspacePath: codingResult.workspacePath,
       workspaceRoot,
       reworkPackage,
-      sandboxMode: loaded.config.codex.sandboxMode,
+      sandboxMode: requestedSandboxMode,
     });
     await writeCodingArtifacts(attemptDir, analysis.taskBrief, codingResult);
     validationReport = await validationRunner.run({ workspacePath: codingResult.workspacePath, commands: validationCommands });
@@ -244,7 +292,7 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
       projectConstraints: {
         permissions: loaded.config.permissions,
         workflow: loaded.config.workflow,
-        codex: loaded.config.codex,
+        codex: { ...loaded.config.codex, sandboxMode: requestedSandboxMode },
       },
       reworkContext: {
         reworkPackage,

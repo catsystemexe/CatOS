@@ -45,7 +45,7 @@ export const finalResultSchema = z.object({
   reworkAttempts: z.number().int().nonnegative(),
   finalWorkspacePath: z.string().min(1),
   finalChangedFiles: z.array(z.string()),
-  finalValidationStatus: z.enum(["PASS", "FAIL", "BLOCKED"]),
+  finalValidationStatus: z.enum(["PASS", "FAIL", "SKIPPED", "BLOCKED"]),
   finalReviewReportPath: z.string().min(1),
   finalDiffPath: z.string().min(1).optional(),
   finalValidationReportPath: z.string().min(1).optional(),

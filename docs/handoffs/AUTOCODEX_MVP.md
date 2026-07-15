@@ -1,75 +1,348 @@
-# AutoCodex Console MVP
+# AutoCodex MVP
 
-## Repository-first setup
+## 1. Purpose
 
-The MVP Console no longer uses Project/Profile as the primary UI selector. The SETUP panel contains only Repository, Repository path, Base branch, PR target, Task and RUN. Project YAML files remain supported for CLI compatibility, but the UI starts runs from an explicit repository path and branch pair.
+AutoCodex is an automated, reviewable pipeline that transfers structured work between Codex execution and GPT/ChatGPT review.
 
-## Repository discovery
+The MVP goal is:
 
-Repository roots are configured in `catos.config.yaml`:
+- user selects a GitHub repository and branch,
+- CatOS creates an isolated run workspace,
+- Codex performs the implementation task,
+- Validation checks the resulting repository state,
+- Review evaluates task acceptance,
+- Final summarizes the complete run,
+- reports are exposed through the Console VIEW,
+- development checkpoints are passed from Codex to ChatGPT through documented handoff files.
+
+AutoCodex is not an IDE, repository browser, or autonomous merge system.
+
+## 2. GitHub-first setup
+
+The Console repository selector must reflect current authenticated GitHub state only.
+
+Required behavior:
+
+- source: GitHub REST API `/user/repos`
+- `GITHUB_TOKEN` preferred
+- `GH_TOKEN` fallback
+- `visibility=all`
+- `affiliation=owner,collaborator,organization_member`
+- `per_page=100`
+- Link `rel=next` pagination
+- deterministic sorting
+- repository IDs: `github:<owner>/<repo>`
+
+Local repositories and previous clones must not:
+
+- suppress a GitHub repository,
+- replace it with `source:"local"`,
+- change selector ordering,
+- influence whether the repository appears.
+
+When a repository disappears from GitHub, it disappears from the selector after refresh. When a repository appears on GitHub, it appears after refresh.
+
+No local filesystem paths are exposed in the repository selector response.
+
+## 3. Branch selection and clone
+
+After repository selection:
+
+- load GitHub branches,
+- user selects an exact branch,
+- clone exactly that repository and branch,
+- use shallow single-branch clone.
+
+Canonical clone destination:
+
+```text
+/home/runner/catos-repositories/Cloned/<owner>/<repo>/<branch>
+```
+
+Canonical clone command:
+
+```sh
+git clone \
+  --branch <branch> \
+  --single-branch \
+  --depth 1 \
+  <clean-url> \
+  <target>
+```
+
+Existing checkout rules:
+
+- validate exact repository identity,
+- validate exact selected branch,
+- validate clean working tree,
+- do not fetch, pull, switch, delete, or overwrite it automatically in MVP.
+
+The source clone remains immutable during a RUN.
+
+## 4. UI start-run contract
+
+Current request:
+
+```json
+{
+  "repositoryPath": "checkout.localPath",
+  "baseBranch": "checkout.branch",
+  "prTargetBranch": "checkout.branch",
+  "task": "string"
+}
+```
+
+`repositoryPath` is the validated branch-specific clone. CatOS resolves the exact base commit, creates an isolated run workspace, and Codex works only in that isolated workspace. The source clone must remain clean.
+
+## 5. Runtime compatibility and security
+
+Replit currently requires Codex runtime compatibility mode:
 
 ```yaml
-repositoryRoots:
-  - /home/runner/workspace
-  - /tmp
+sandboxMode: danger-full-access
+approvalPolicy: never
 ```
 
-If this file is absent, CatOS scans only `process.cwd()`. CatOS never scans the whole filesystem. Discovery walks the configured roots to a bounded depth of three levels, canonicalizes paths via `realpath`, verifies candidates with `git rev-parse --is-inside-work-tree`, supports both `.git` directories and `.git` files for worktrees, and deduplicates symlinked repositories by canonical top-level path. It ignores `node_modules`, `.git`, `runs`, `build`, `dist`, `coverage`, CatOS runtime/workspace directories, and continues when one directory cannot be read.
+Reason: `workspace-write` relies on bwrap/user namespace capabilities unavailable in the target Replit environment.
 
+Required safeguards:
 
-## GitHub repository discovery and clone
+- isolated external run workspace,
+- no secrets in target repository,
+- explicit environment allowlist,
+- isolated `HOME` and `TMPDIR`,
+- Git system/global config disabled,
+- `GIT_TERMINAL_PROMPT=0`,
+- coordinator write probe,
+- workspace boundary and realpath checks,
+- runtime manifest without secret values,
+- no automatic commit, push, PR, or merge.
 
-The Console can augment local repository discovery with GitHub repositories available to the authenticated Replit user. In Replit, configure a Secret named `GITHUB_TOKEN` with read-only repository access for the repositories that should appear in the selector. `GH_TOKEN` is accepted as a fallback alias, but `GITHUB_TOKEN` takes precedence. The token is read from the environment at runtime, is not written to source, config, remotes, logs, run artifacts, or UI state, and no token input is exposed in the UI.
+`danger-full-access` disables Codex sandbox isolation. The safety boundary is therefore CatOS workspace isolation, environment restriction, repository selection, Human Gate, and audit artifacts.
 
-GitHub discovery uses the GitHub REST API directly with built-in `fetch`; the `gh` CLI is not required. If no token is available, CatOS does not attempt anonymous public repository discovery and the UI shows only the short message `GitHub repositories unavailable.` while local discovery continues to work.
+## 6. AutoCodex RUN model
 
-Remote GitHub repositories are cloned only after the user presses `clone`, into the managed persistent root `/home/runner/catos-repositories/<owner>/<repo>` using sanitized owner/repo path segments. Private HTTPS clones use a temporary `GIT_ASKPASS` helper and `GIT_TERMINAL_PROMPT=0`; clone URLs and stored `origin` remotes remain clean `https://github.com/owner/repo.git` URLs without embedded credentials.
+Exactly four user-visible rows are shown:
 
-## Manual repository path
+1. CODEX
+2. VALIDATION
+3. REVIEW
+4. FINAL
 
-The UI also accepts a manually entered Repository path. Manual paths may be outside configured roots because the user explicitly supplied them. CatOS canonicalizes the path, verifies that it exists, verifies it is a Git worktree, adds it to the in-memory selector list, and loads local branches. It is not persisted by the MVP.
+For each row the UI exposes purpose through its name, inputs through reports, outputs through report artifacts, and status/time in RUN.
 
-## Branch selectors
+Recommended statuses:
 
-After a repository is selected, CatOS loads local branches with `git for-each-ref --format=%(refname:short) refs/heads`. Base branch defaults to the current branch, then `main`, then `master`, then the first local branch. PR target initially defaults to the base branch. When base changes, PR target follows until the user manually changes PR target. Before RUN, both branches must exist.
+- waiting
+- running
+- completed
+- failed
+- blocked
+- rework
+- human_required
+- stopped
 
-## UI start-run contract
+Completed is not merely “process exited”. Completed means the step completed its functional responsibility.
 
-```ts
-type UiStartRunInput = {
-  repositoryPath: string;
-  baseBranch: string;
-  prTargetBranch: string;
-  task: string;
-};
+## 7. CODEX step
+
+Purpose: perform the user task in the isolated workspace.
+
+Inputs:
+
+- task
+- repository snapshot
+- branch/base commit
+- runtime configuration
+
+Primary source artifacts:
+
+- `coding-result.json`
+- `workspace.diff`
+- `workspace-status.txt`
+- `runtime/runtime.json`
+- `runtime/codex-runtime-error.json`
+- final Codex response
+
+User-visible report:
+
+- `01_CODEX_REPORT.md`
+
+The report must expose:
+
+- task
+- runtime mode
+- write-probe result
+- actual actions when available
+- commands when available
+- created / modified / deleted files
+- diff and workspace result
+- full final Codex response
+- exact preserved runtime error
+
+A bwrap/write failure must produce blocked or failed, not completed.
+
+## 8. VALIDATION step
+
+Purpose: run repository checks and report their real semantic state.
+
+Primary source artifact:
+
+- `validation-report.json`
+
+User-visible report:
+
+- `02_VALIDATION_REPORT.md`
+
+Check states:
+
+- PASS
+- FAIL
+- SKIPPED
+- BLOCKED
+
+A no-op placeholder command must be reported as SKIPPED, never PASS.
+
+Validation must distinguish repository checks from task acceptance. Generic repository validation does not prove the requested user output exists.
+
+## 9. REVIEW step
+
+Purpose: compare the task acceptance criteria with actual workspace evidence.
+
+Inputs include:
+
+- original task
+- coding result
+- validation result
+- workspace diff/status
+- changed files
+- expected outputs
+
+User-visible report:
+
+- `03_REVIEW_REPORT.md`
+
+Decisions:
+
+- ACCEPT
+- REWORK
+- HUMAN_REQUIRED
+
+REWORK must contain concrete actionable instructions.
+
+## 10. FINAL step
+
+Purpose: create the final terminal summary of the run.
+
+User-visible report:
+
+- `FINAL_REPORT.md`
+
+The report must contain:
+
+- GitHub repository full name
+- selected base branch
+- internal run branch separately
+- run ID
+- terminal status
+- durations
+- all step statuses
+- changed files
+- final outcome
+- root cause
+- final Codex response
+
+Generate `FINAL_REPORT.md` for all terminal states.
+
+## 11. Console UI
+
+Current right panel:
+
+- RUN
+- VIEW
+
+RUN rows:
+
+```text
+1 CODEX       status time REPORT
+2 VALIDATION  status time REPORT
+3 REVIEW      status time REPORT
+4 FINAL       status time FINAL REPORT
 ```
 
-The backend validates the repository, validates both branches, resolves the exact base commit, creates the `catos/<runId>` run branch from that snapshot, and continues through the existing AutoCodex orchestration. CLI compatibility is preserved with `npm run catos -- run --project ...`; the CLI also accepts repository-started runs internally.
+VIEW:
 
-## Repository run config fallback
+- selected report context
+- read-only report content
+- internal scrolling
+- one COPY action for currently displayed content
 
-For repository-started runs CatOS resolves config in this order: repo-local CatOS config, matching `projects/*.yaml` by canonical repository path, inferred npm scripts from `package.json`, then a safe default. Inferred validation commands only use `npm run typecheck`, `npm test`, and `npm run build` when matching scripts exist; missing scripts are explicit no-op skips. Session input records `configSource` as `project-config`, `repo-config`, `inferred`, or `default`.
+No separate OUTPUT panel. No Technical details panel. No raw JSON in the main UI. No multiple-output selector.
 
-## GPT handoff
+## 12. Report contract
 
-AutoCodex runtime does not generate GPT handoff artifacts. The only GPT handoff is the final text response produced by Codex after a development task completes.
+Required report filenames:
 
-## UI handoff workflow
+- `01_CODEX_REPORT.md`
+- `02_VALIDATION_REPORT.md`
+- `03_REVIEW_REPORT.md`
+- `FINAL_REPORT.md`
 
-Timeline rows open their actual phase outputs, such as coding results, validation reports, review reports/packages, and the final session report.
+Reports are MVP user-facing artifacts. They must be created from real source artifacts and must not use placeholders when source data exists.
 
-## Final export
+Path/token redaction must redact only actual sensitive values and absolute filesystem paths. It must not corrupt normal prose such as:
 
-The session-level final export remains a summary of real session artifacts and does not link GPT handoff files.
+- `workspace diff/status`
+- `input/output`
+- `file/path`
 
-## Example workflow
+## 13. ChatGPT development handoff
 
-Select repository → select base branch → PR target defaults to base → enter task → RUN → inspect actual phase outputs → final session export summarizes the session.
+Runtime reports and development handoffs are separate artifacts.
 
-## Security boundaries
+Runtime report:
 
-No whole-filesystem scans, no token persistence, no token-bearing remote URLs, no automatic push, no remote PR, no merge, no interactive auth flow, and no environment dump. Viewer paths remain restricted to the run root.
+- belongs to an AutoCodex user RUN,
+- displayed in VIEW,
+- describes CODEX / VALIDATION / REVIEW / FINAL.
 
-## Known limitations
+ChatGPT development handoff:
 
-The MVP has no complex filesystem browser, no multi-user dashboard, no IDE/editor, no anonymous GitHub discovery without credentials, and no parallel run dashboard. Manual repository paths are in-memory only. STOP remains best-effort for UI-started child processes.
+- belongs to CatOS development work,
+- generated by Codex after a meaningful implementation or repair checkpoint,
+- passed to ChatGPT for review and next-step planning,
+- stored in `docs/handoffs/sessions/`.
+
+Development handoffs follow `docs/handoffs/CHATGPT_HANDOFF_TEMPLATE.md`.
+
+## 14. Human Gate and Git operations
+
+The MVP performs:
+
+- no automatic commit,
+- no automatic push,
+- no automatic PR,
+- no automatic merge,
+- source clone remains unchanged,
+- approval and commit remain explicit operations.
+
+## 15. MVP test task
+
+Deterministic E2E test task:
+
+Create `docs/AUTOCODEX_E2E_TEST.md` with exact requested content and verify:
+
+- exact content,
+- exactly one changed file,
+- `git diff --check`.
+
+## 16. Known limitations
+
+- `danger-full-access` effective mode cannot currently be independently confirmed by the SDK.
+- Action trace may be incomplete when Codex returns only a final response.
+- Clipboard may be restricted by embedded browser contexts.
+- STOP is best-effort.
+- No parallel-run dashboard.
+- No automatic Git publication.
+
+Previous design note: earlier documents described Project/Profile selectors, local repository discovery, manual repository paths, a separate OUTPUT panel, session-report wording, and a runtime GPT handoff based only on the final Codex response. Those are not the current MVP contract.

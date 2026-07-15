@@ -198,3 +198,13 @@ describe("ShellValidationRunner", () => {
     ]);
   });
 });
+
+  it("reports configured skips as SKIPPED without executing placeholder commands", async () => {
+    const runner = new ShellValidationRunner();
+    const report = await runner.run({ workspacePath: await workspace(), commands: [{ name: "typecheck", command: "catos:skip:no npm script named typecheck", required: true, timeoutMs: 1000 }] });
+    expect(report.status).toBe("SKIPPED");
+    expect(report.results[0]?.status).toBe("SKIPPED");
+    expect(report.results[0]?.command).toBe("catos:skip:no npm script named typecheck");
+    expect(JSON.stringify(report)).not.toContain("${name}");
+    expect(report.results[0]?.exitCode).toBeNull();
+  });
