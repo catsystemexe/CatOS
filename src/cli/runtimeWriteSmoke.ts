@@ -1,4 +1,5 @@
 import { CodexSdkWorker } from "../codingWorker.js";
+import type { TaskBrief } from "../schemas/taskBrief.js";
 import { resolveWorkspaceRoot } from "../workspaceRoot.js";
 
 function readOption(args: string[], name: string): string | undefined {
@@ -14,12 +15,21 @@ export async function runtimeWriteSmokeCommand(args: string[]): Promise<void> {
   if (!repositoryPath) throw new Error("Missing --repo for runtime write smoke test.");
   const runId = `runtime-write-smoke-${new Date().toISOString().replace(/[^A-Za-z0-9._-]+/g, "-")}`;
   const worker = new CodexSdkWorker();
+  const originalTask = [
+    "Create file: AUTOCODEX_RUNTIME_WRITE_TEST.txt",
+    "Exact content: runtime write succeeded",
+    "No other changes.",
+  ].join("\n");
+  const taskBrief: TaskBrief = {
+    objective: "Runtime write smoke test",
+    acceptanceCriteria: ["AUTOCODEX_RUNTIME_WRITE_TEST.txt exists with exact content."],
+    nonGoals: ["No other changes."],
+    codexInstruction: originalTask,
+    riskLevel: "trivial",
+  };
   const result = await worker.executeTask({
-    instruction: [
-      "Create file: AUTOCODEX_RUNTIME_WRITE_TEST.txt",
-      "Exact content: runtime write succeeded",
-      "No other changes.",
-    ].join("\n"),
+    originalTask,
+    taskBrief,
     repositoryPath,
     baseBranch,
     runId,

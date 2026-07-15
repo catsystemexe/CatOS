@@ -4,9 +4,40 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { buildIsolatedWorkspacePath, codexSandboxWriteFailure, CodexSdkWorker, createForkedCodexRuntimeRunner, guardCodexWorkspace, normalizeWorkBranchName, probeWorkspaceWritable, writeCodingArtifacts, type CodingResult } from "../src/codingWorker.js";
+import { buildCodexInstruction, buildIsolatedWorkspacePath, buildReworkCodexInstruction, codexSandboxWriteFailure, CodexSdkWorker, createForkedCodexRuntimeRunner, guardCodexWorkspace, normalizeWorkBranchName, probeWorkspaceWritable, sha256Text, writeCodingArtifacts, type CodingResult } from "../src/codingWorker.js";
+import type { TaskBrief } from "../src/schemas/taskBrief.js";
 
 const execFileAsync = promisify(execFile);
+
+const literalTask = [
+  "Create exactly one file:",
+  "",
+  "docs/AUTOCODEX_UI_DEMO.md",
+  "",
+  "The file content must be exactly the text inside the BEGIN/END markers.",
+  "Do not include the markers themselves.",
+  "",
+  "BEGIN FILE CONTENT",
+  "# AutoCodex UI Demo",
+  "",
+  "Status: passed",
+  "Purpose: verify task integrity",
+  "Literal: `preserve this`",
+  "END FILE CONTENT",
+].join("\n");
+
+const taskBrief: TaskBrief = {
+  objective: "Create the demo documentation file.",
+  acceptanceCriteria: ["The requested documentation file exists with exact content."],
+  nonGoals: ["Do not include BEGIN/END markers in the created file."],
+  codexInstruction: "Create the requested documentation file.",
+  riskLevel: "standard",
+};
+
+function codingTask(overrides: Record<string, unknown> = {}) {
+  return { originalTask: literalTask, taskBrief, ...overrides } as { originalTask: string; taskBrief: TaskBrief };
+}
+
 
 async function git(args: string[], cwd: string): Promise<string> {
   const { stdout } = await execFileAsync("git", args, { cwd, encoding: "utf8" });
@@ -55,19 +86,63 @@ describe("writeCodingArtifacts", () => {
   });
 });
 
+
+describe("Coding task integrity prompt builders", () => {
+  it("preserves the literal original task and keeps derived guidance separate", () => {
+    const instruction = buildCodexInstruction({ originalTask: literalTask, taskBrief });
+    expect(instruction).toContain(literalTask);
+    expect(instruction.indexOf("## Original user task — verbatim")).toBeLessThan(instruction.indexOf("## Derived implementation guidance"));
+    const originalStart = instruction.indexOf(literalTask);
+    expect(originalStart).toBeGreaterThan(instruction.indexOf("## Original user task — verbatim"));
+    expect(originalStart).toBeLessThan(instruction.indexOf("## Derived implementation guidance"));
+    expect(instruction).toContain("## Derived implementation guidance\n\nCreate the requested documentation file.");
+  });
+
+  it("preserves original task in rework prompts with findings and required changes", () => {
+    const instruction = buildReworkCodexInstruction({
+      originalTask: literalTask,
+      taskBrief,
+      reviewVerdict: "REWORK",
+      previousAttemptResult: "Initial attempt missed the exact literal content.",
+      reworkPackage: {
+        schemaVersion: 1,
+        attempt: 2,
+        originalObjective: taskBrief.objective,
+        acceptanceCriteria: taskBrief.acceptanceCriteria,
+        blockingFindings: [{ id: "finding-1", title: "Missing exact content", evidence: "File content did not match.", requiredChange: "Use the exact text between BEGIN/END markers." }],
+        preserve: ["Preserve unrelated files."],
+        mustChange: ["Use the exact text between BEGIN/END markers."],
+        mustNotChange: ["Do not create commits."],
+        previousAttemptSummary: "Initial attempt missed literal content.",
+      },
+    });
+    expect(instruction).toContain(literalTask);
+    expect(instruction).toContain("## Existing derived task brief");
+    expect(instruction).toContain("## Review verdict\n\nREWORK");
+    expect(instruction).toContain("finding-1: Missing exact content");
+    expect(instruction).toContain("Use the exact text between BEGIN/END markers.");
+    expect(instruction.length).toBeGreaterThan("Use the exact text between BEGIN/END markers.".length);
+  });
+
+  it("computes deterministic SHA-256 hashes for original task metadata", () => {
+    expect(sha256Text(literalTask)).toMatch(/^[a-f0-9]{64}$/);
+    expect(sha256Text(literalTask)).toBe(sha256Text(literalTask));
+  });
+});
+
 describe("CodexSdkWorker", () => {
   it("rejects a path that is not a Git repository", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "catos-not-git-"));
     const worker = new CodexSdkWorker({ codexRuntimeRunner: async () => { throw new Error("Codex must not start"); } });
 
-    await expect(worker.executeTask({ instruction: "x", repositoryPath: directory, baseBranch: "main", runId: "run", workspaceRoot: path.join(os.tmpdir(), "catos-workspaces") })).rejects.toThrow(/Git command failed/);
+    await expect(worker.executeTask({ ...codingTask(), repositoryPath: directory, baseBranch: "main", runId: "run", workspaceRoot: path.join(os.tmpdir(), "catos-workspaces") })).rejects.toThrow(/Git command failed/);
   });
 
   it("rejects a missing base branch before starting Codex", async () => {
     const repo = await createRepo("main");
     const worker = new CodexSdkWorker({ codexRuntimeRunner: async () => { throw new Error("Codex must not start"); } });
 
-    await expect(worker.executeTask({ instruction: "x", repositoryPath: repo, baseBranch: "missing", runId: "run", workspaceRoot: path.join(os.tmpdir(), "catos-run-missing") })).rejects.toThrow(/Git command failed/);
+    await expect(worker.executeTask({ ...codingTask(), repositoryPath: repo, baseBranch: "missing", runId: "run", workspaceRoot: path.join(os.tmpdir(), "catos-run-missing") })).rejects.toThrow(/Git command failed/);
   });
 
   it("normalizes unsafe work branch names", () => {
@@ -93,7 +168,7 @@ describe("CodexSdkWorker", () => {
       },
     });
 
-    const result = await worker.executeTask({ instruction: "Change README", repositoryPath: repo, baseBranch: "main", runId: "run 1", workspaceRoot });
+    const result = await worker.executeTask({ ...codingTask({ originalTask: "Change README", taskBrief: { ...taskBrief, codexInstruction: "Change README" } }), repositoryPath: repo, baseBranch: "main", runId: "run 1", workspaceRoot });
 
     expect(receivedInstruction).toContain("Change README");
     expect(receivedInstruction).toContain("Do not create commits, push, merge, or rebase.");
@@ -140,6 +215,25 @@ describe("CodexSdkWorker", () => {
     await expect(buildIsolatedWorkspacePath({ workspaceRoot: path.join(repo, "nested"), runId: "bad", repositoryPath: repo, catosRoot })).rejects.toThrow(/target repository checkout/);
   });
 
+
+  it("sends the exact original task through the Codex runtime IPC request", async () => {
+    const repo = await createRepo("main");
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "catos-worker-ipc-workspaces-"));
+    let receivedInstruction = "";
+    const worker = new CodexSdkWorker({
+      codexRuntimeRunner: async ({ request }) => {
+        receivedInstruction = request.instruction;
+        return { threadId: "thread-ipc", finalResponse: "ok" };
+      },
+    });
+
+    await worker.executeTask({ ...codingTask(), repositoryPath: repo, baseBranch: "main", runId: "ipc", workspaceRoot });
+
+    expect(receivedInstruction).toContain(literalTask);
+    expect(receivedInstruction.indexOf("## Original user task — verbatim")).toBeLessThan(receivedInstruction.indexOf("## Derived implementation guidance"));
+    expect(receivedInstruction).toContain("## Derived implementation guidance\n\nCreate the requested documentation file.");
+  });
+
   it("passes danger-full-access to the SDK only when explicitly requested and records disabled isolation", async () => {
     const repo = await createRepo("main");
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "catos-worker-danger-workspaces-"));
@@ -152,7 +246,7 @@ describe("CodexSdkWorker", () => {
       },
     });
 
-    const result = await worker.executeTask({ instruction: "Change README", repositoryPath: repo, baseBranch: "main", runId: "danger", workspaceRoot, sandboxMode: "danger-full-access" });
+    const result = await worker.executeTask({ ...codingTask({ originalTask: "Change README", taskBrief: { ...taskBrief, codexInstruction: "Change README" } }), repositoryPath: repo, baseBranch: "main", runId: "danger", workspaceRoot, sandboxMode: "danger-full-access" });
 
     expect(receivedSandboxMode).toBe("danger-full-access");
     expect(result.sandboxMode).toBe("danger-full-access");
@@ -193,7 +287,7 @@ describe("CodexSdkWorker", () => {
         },
       });
 
-      await worker.executeTask({ instruction: "Inspect env", repositoryPath: repo, baseBranch: "main", runId: "env", workspaceRoot });
+      await worker.executeTask({ ...codingTask({ originalTask: "Inspect env", taskBrief: { ...taskBrief, codexInstruction: "Inspect env" } }), repositoryPath: repo, baseBranch: "main", runId: "env", workspaceRoot });
 
       expect(process.env.GITHUB_TOKEN).toBe("secret-value");
       expect(process.env.MY_PRIVATE_API_KEY).toBe("secret-value");
@@ -228,7 +322,7 @@ describe("CodexSdkWorker", () => {
         },
       });
 
-      await expect(worker.executeTask({ instruction: "Fail", repositoryPath: repo, baseBranch: "main", runId: "env-error", workspaceRoot })).rejects.toThrow(/SDK failed/);
+      await expect(worker.executeTask({ ...codingTask({ originalTask: "Fail", taskBrief: { ...taskBrief, codexInstruction: "Fail" } }), repositoryPath: repo, baseBranch: "main", runId: "env-error", workspaceRoot })).rejects.toThrow(/SDK failed/);
       expect(process.env).toEqual(before);
     } finally {
       if (previousToken === undefined) delete process.env.GITHUB_TOKEN; else process.env.GITHUB_TOKEN = previousToken;
@@ -262,10 +356,13 @@ describe("CodexSdkWorker", () => {
     });
 
     const result = await worker.continueTask({
+      originalTask: literalTask,
+      taskBrief,
       threadId: "thread-existing",
       workspacePath: workspace,
       workspaceRoot,
       sandboxMode: "workspace-write",
+      attemptNumber: 2,
       reworkPackage: {
         schemaVersion: 1,
         attempt: 1,
@@ -301,7 +398,7 @@ describe("CodexSdkWorker", () => {
       },
     });
 
-    const result = await worker.executeTask({ instruction: "Inspect only", repositoryPath: repo, baseBranch: "main", runId: "cwd", workspaceRoot });
+    const result = await worker.executeTask({ ...codingTask({ originalTask: "Inspect only", taskBrief: { ...taskBrief, codexInstruction: "Inspect only" } }), repositoryPath: repo, baseBranch: "main", runId: "cwd", workspaceRoot });
 
     expect(receivedWorkspace).toBe(path.join(workspaceRoot, "cwd", "workspace"));
     expect(result.workspacePath).toBe(receivedWorkspace);
@@ -321,7 +418,7 @@ describe("CodexSdkWorker", () => {
         codexRuntimeRunner: createForkedCodexRuntimeRunner({ childPath, timeoutMs: 10_000 }),
       });
 
-      const result = await worker.executeTask({ instruction: "Inspect runtime", repositoryPath: repo, baseBranch: "main", runId: "fork", workspaceRoot });
+      const result = await worker.executeTask({ ...codingTask({ originalTask: "Inspect runtime", taskBrief: { ...taskBrief, codexInstruction: "Inspect runtime" } }), repositoryPath: repo, baseBranch: "main", runId: "fork", workspaceRoot });
 
       expect(process.env).toEqual(before);
       expect(result.threadId).toBe("fake-thread");
@@ -350,7 +447,7 @@ describe("CodexSdkWorker", () => {
     const childPath = path.resolve("tests/fixtures/codexRuntimeFakeChild.cjs");
     const worker = new CodexSdkWorker({ codexRuntimeRunner: createForkedCodexRuntimeRunner({ childPath, timeoutMs: 10_000 }) });
 
-    const result = await worker.executeTask({ instruction: "Inspect runtime", repositoryPath: repo, baseBranch: "main", runId: "manifest", workspaceRoot, sandboxMode: "danger-full-access" });
+    const result = await worker.executeTask({ ...codingTask({ originalTask: "Inspect runtime", taskBrief: { ...taskBrief, codexInstruction: "Inspect runtime" } }), repositoryPath: repo, baseBranch: "main", runId: "manifest", workspaceRoot, sandboxMode: "danger-full-access" });
 
     const runtimeDir = path.join(workspaceRoot, "manifest", "runtime");
     const manifest = JSON.parse(await readFile(path.join(runtimeDir, "runtime.json"), "utf8"));
@@ -373,7 +470,7 @@ describe("CodexSdkWorker", () => {
     const childPath = path.resolve("tests/fixtures/codexRuntimeFakeChild.cjs");
     const worker = new CodexSdkWorker({ codexRuntimeRunner: createForkedCodexRuntimeRunner({ childPath, timeoutMs: 10_000 }) });
 
-    const result = await worker.executeTask({ instruction: "MODE=WRITE_TEST", repositoryPath: repo, baseBranch: "main", runId: "write", workspaceRoot, sandboxMode: "danger-full-access" });
+    const result = await worker.executeTask({ ...codingTask({ originalTask: "MODE=WRITE_TEST", taskBrief: { ...taskBrief, codexInstruction: "MODE=WRITE_TEST" } }), repositoryPath: repo, baseBranch: "main", runId: "write", workspaceRoot, sandboxMode: "danger-full-access" });
 
     expect(await readFile(path.join(result.workspacePath, "AUTOCODEX_RUNTIME_WRITE_TEST.txt"), "utf8")).toBe("runtime write succeeded");
     expect(result.changedFiles).toEqual(["AUTOCODEX_RUNTIME_WRITE_TEST.txt"]);
@@ -402,7 +499,7 @@ describe("CodexSdkWorker", () => {
       workspaceProbeOpen: async () => { throw Object.assign(new Error("injected probe write failure"), { code: "EACCES" }); },
     });
 
-    await expect(worker.executeTask({ instruction: "x", repositoryPath: repo, baseBranch: "main", runId: "nonwrite", workspaceRoot })).rejects.toThrow(/WORKSPACE_NOT_WRITABLE: coordinator write probe failed/);
+    await expect(worker.executeTask({ ...codingTask(), repositoryPath: repo, baseBranch: "main", runId: "nonwrite", workspaceRoot })).rejects.toThrow(/WORKSPACE_NOT_WRITABLE: coordinator write probe failed/);
     expect(spawned).toBe(false);
   });
 
@@ -429,17 +526,17 @@ describe("CodexSdkWorker", () => {
 
     await expect(new CodexSdkWorker({
       codexRuntimeRunner: createForkedCodexRuntimeRunner({ childPath, timeoutMs: 10_000 }),
-    }).executeTask({ instruction: "MODE=EXIT", repositoryPath: repo, baseBranch: "main", runId: "exit", workspaceRoot })).rejects.toThrow(/exited with code 7/);
+    }).executeTask({ ...codingTask({ originalTask: "MODE=EXIT", taskBrief: { ...taskBrief, codexInstruction: "MODE=EXIT" } }), repositoryPath: repo, baseBranch: "main", runId: "exit", workspaceRoot })).rejects.toThrow(/exited with code 7/);
     await expect(readFile(path.join(workspaceRoot, "exit", "runtime", "codex-runtime-error.json"), "utf8")).resolves.toContain("exit-code");
 
     await expect(new CodexSdkWorker({
       codexRuntimeRunner: createForkedCodexRuntimeRunner({ childPath, timeoutMs: 10_000 }),
-    }).executeTask({ instruction: "MODE=MALFORMED", repositoryPath: repo, baseBranch: "main", runId: "malformed", workspaceRoot })).rejects.toThrow(/malformed result/);
+    }).executeTask({ ...codingTask({ originalTask: "MODE=MALFORMED", taskBrief: { ...taskBrief, codexInstruction: "MODE=MALFORMED" } }), repositoryPath: repo, baseBranch: "main", runId: "malformed", workspaceRoot })).rejects.toThrow(/malformed result/);
     await expect(readFile(path.join(workspaceRoot, "malformed", "runtime", "codex-runtime-error.json"), "utf8")).resolves.toContain("malformed-result");
 
     await expect(new CodexSdkWorker({
       codexRuntimeRunner: createForkedCodexRuntimeRunner({ childPath, timeoutMs: 100 }),
-    }).executeTask({ instruction: "MODE=TIMEOUT", repositoryPath: repo, baseBranch: "main", runId: "timeout", workspaceRoot })).rejects.toThrow(/timed out/);
+    }).executeTask({ ...codingTask({ originalTask: "MODE=TIMEOUT", taskBrief: { ...taskBrief, codexInstruction: "MODE=TIMEOUT" } }), repositoryPath: repo, baseBranch: "main", runId: "timeout", workspaceRoot })).rejects.toThrow(/timed out/);
     await expect(readFile(path.join(workspaceRoot, "timeout", "runtime", "codex-runtime-error.json"), "utf8")).resolves.toContain("timeout");
 
     const workspace = path.join(workspaceRoot, "continue-workspace");
@@ -454,10 +551,13 @@ describe("CodexSdkWorker", () => {
     const continuation = await new CodexSdkWorker({
       codexRuntimeRunner: createForkedCodexRuntimeRunner({ childPath, timeoutMs: 10_000 }),
     }).continueTask({
+      originalTask: literalTask,
+      taskBrief,
       threadId: "thread-existing",
       workspacePath: workspace,
       workspaceRoot,
       sandboxMode: "workspace-write",
+      attemptNumber: 2,
       reworkPackage: {
         schemaVersion: 1,
         attempt: 1,

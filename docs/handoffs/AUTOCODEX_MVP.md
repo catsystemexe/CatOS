@@ -146,7 +146,27 @@ Recommended statuses:
 
 Completed is not merely “process exited”. Completed means the step completed its functional responsibility.
 
-## 7. CODEX step
+## 7. Task integrity for Coding
+
+The original UI task is the authoritative source for literal user requirements.
+
+Required behavior:
+
+- store the original task verbatim in `input.json.goal`,
+- pass the original task verbatim to every Coding attempt, including rework attempts,
+- keep the original task as an independent field separate from `TaskBrief`,
+- treat `TaskBrief` as additive derived implementation guidance, not as a replacement for the original task,
+- treat Review rework instructions as additive guidance, not as a replacement for the original task,
+- preserve Markdown headings, blank lines, backticks, BEGIN/END markers, indentation, punctuation, and exact file-content blocks in the Coding prompt,
+- retain the original task during rework attempts even when Review findings focus on only a subset of required changes,
+- store the actual rendered Coding instruction attempt-locally as `coding-instruction.md`,
+- keep `coding-instruction.md` free of API keys, authorization headers, secret environment values, and unnecessary absolute workspace paths,
+- record non-secret task-integrity metadata such as instruction artifact path, original task length, original task SHA-256, rendered instruction SHA-256, and attempt number,
+- never overwrite one attempt's instruction artifact with a later attempt's artifact.
+
+Derived fields may include implementation guidance, acceptance criteria, expected files, non-goals, constraints, Review findings, and required rework changes. If derived guidance conflicts with an explicit literal requirement in the original task, Coding must preserve the original literal requirement and surface the conflict rather than silently changing or omitting it.
+
+## 8. CODEX step
 
 Purpose: perform the user task in the isolated workspace.
 
@@ -184,7 +204,7 @@ The report must expose:
 
 A bwrap/write failure must produce blocked or failed, not completed.
 
-## 8. VALIDATION step
+## 9. VALIDATION step
 
 Purpose: run repository checks and report their real semantic state.
 
@@ -207,7 +227,7 @@ A no-op placeholder command must be reported as SKIPPED, never PASS. When no rep
 
 Validation must distinguish repository checks from task acceptance. Generic repository validation does not prove the requested user output exists.
 
-## 9. REVIEW step
+## 10. REVIEW step
 
 Purpose: compare the task acceptance criteria with actual workspace evidence.
 
@@ -232,7 +252,7 @@ Decisions:
 
 REWORK must contain concrete actionable instructions.
 
-## 10. FINAL step
+## 11. FINAL step
 
 Purpose: create the final terminal summary of the run.
 
@@ -256,7 +276,7 @@ The report must contain:
 
 Generate `FINAL_REPORT.md` for all terminal states.
 
-## 11. Console UI
+## 12. Console UI
 
 Current right panel:
 

@@ -2,16 +2,16 @@ import { analyzeTaskBrief, writeTaskBrief, type TaskAnalystProvider } from "../a
 import { loadProjectConfig } from "../config/loadConfig.js";
 import { resolveRepositoryRunConfig } from "../repositoryRunConfig.js";
 import { validateManualRepository } from "../repositoryDiscovery.js";
-import { stat, writeFile } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import { createRun } from "../runs/createRun.js";
-import { CodexSdkWorker, writeCodingArtifacts, type CodingWorker, normalizeWorkBranchName, buildIsolatedWorkspacePath } from "../codingWorker.js";
+import { CodexSdkWorker, buildCodexInstruction, buildReworkCodexInstruction, sha256Text, writeCodingArtifacts, type CodingWorker, normalizeWorkBranchName, buildIsolatedWorkspacePath, type CodingResult } from "../codingWorker.js";
 import { ShellValidationRunner, buildValidationCommands, writeValidationReport, type ValidationRunner } from "../validationRunner.js";
 import { reviewChange, writeReviewReport, type ReviewerProvider } from "../agents/reviewer.js";
 import { resolveWorkspaceRoot } from "../workspaceRoot.js";
 import { buildReworkPackage, hasRepeatedBlockingFinding, writeFinalResult, writeReworkPackage } from "../reworkLoop.js";
 import type { FinalResult } from "../schemas/finalResult.js";
 import path from "node:path";
-import { artifactRefs, completeAttempt, createSession, startAttempt, appendTimelineEvent } from "../runs/sessionModel.js";
+import { artifactRefs, attemptDir as sessionAttemptDir, completeAttempt, createSession, startAttempt, appendTimelineEvent } from "../runs/sessionModel.js";
 import { assertWorkspaceBranch, resolveGitContext } from "../gitSession.js";
 import { collectWorkspaceDiffCheck } from "../gitWorkspaceState.js";
 
@@ -28,6 +28,24 @@ function readOption(args: string[], name: string): string | undefined {
   const index = args.indexOf(name);
   if (index === -1) return undefined;
   return args[index + 1];
+}
+
+
+async function writeCodingInstructionAudit(input: { runDir: string; artifactDir: string; sessionAttemptDir?: string; instruction: string; originalTask: string; attemptNumber: number }): Promise<Pick<CodingResult, "instructionArtifactPath" | "originalTaskLength" | "originalTaskSha256" | "renderedInstructionSha256" | "attemptNumber">> {
+  await mkdir(input.artifactDir, { recursive: true });
+  const artifactPath = path.join(input.artifactDir, "coding-instruction.md");
+  await writeFile(artifactPath, input.instruction, "utf8");
+  if (input.sessionAttemptDir && path.resolve(input.sessionAttemptDir) !== path.resolve(input.artifactDir)) {
+    await mkdir(input.sessionAttemptDir, { recursive: true });
+    await writeFile(path.join(input.sessionAttemptDir, "coding-instruction.md"), input.instruction, "utf8");
+  }
+  return {
+    instructionArtifactPath: path.relative(input.runDir, artifactPath),
+    originalTaskLength: Buffer.byteLength(input.originalTask, "utf8"),
+    originalTaskSha256: sha256Text(input.originalTask),
+    renderedInstructionSha256: sha256Text(input.instruction),
+    attemptNumber: input.attemptNumber,
+  };
 }
 
 async function isTracked(workspacePath: string, file: string): Promise<boolean> {
@@ -89,13 +107,16 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
   const maxReworkAttempts = loaded.config.workflow.maxReworkAttempts;
 
   let currentStep = sessionState.step;
-  let currentAttempt = await startAttempt({ runDir: run.runDir, step: currentStep, prompt: analysis.taskBrief.codexInstruction, runtimeMode: requestedSandboxMode });
+  const initialInstruction = buildCodexInstruction({ originalTask: goal, taskBrief: analysis.taskBrief });
+  let currentAttempt = await startAttempt({ runDir: run.runDir, step: currentStep, prompt: initialInstruction, runtimeMode: requestedSandboxMode });
+  const initialInstructionMetadata = await writeCodingInstructionAudit({ runDir: run.runDir, artifactDir: run.runDir, sessionAttemptDir: sessionAttemptDir(run.runDir, currentStep, currentAttempt), instruction: initialInstruction, originalTask: goal, attemptNumber: currentAttempt.order });
 
   let codingResult;
   let codingArtifacts;
   try {
     codingResult = await codingWorker.executeTask({
-      instruction: analysis.taskBrief.codexInstruction,
+      originalTask: goal,
+      taskBrief: analysis.taskBrief,
       repositoryPath: loaded.absoluteRepoPath,
       baseBranch,
       baseCommit: git.baseCommit,
@@ -104,6 +125,8 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
       runId: run.runId,
       workspaceRoot,
       sandboxMode: requestedSandboxMode,
+      approvalPolicy: "never",
+      attemptNumber: currentAttempt.order,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -117,6 +140,7 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
       sandboxMode: requestedSandboxMode,
       sandboxIsolation: requestedSandboxMode === "danger-full-access" ? "disabled" as const : "enabled" as const,
     };
+    Object.assign(codingResult, initialInstructionMetadata);
     codingArtifacts = await writeCodingArtifacts(run.runDir, analysis.taskBrief, codingResult);
     await completeAttempt({
       runDir: run.runDir,
@@ -130,6 +154,7 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
       workspacePath: codingResult.workspacePath,
       artifacts: artifactRefs(run.runDir, {
         codingResultPath: codingArtifacts.codingResultPath,
+        codingInstructionPath: path.join(run.runDir, initialInstructionMetadata.instructionArtifactPath!),
         diffPath: codingArtifacts.diffPath,
         statusPath: codingArtifacts.statusPath,
         taskBriefPath: codingArtifacts.taskBriefPath,
@@ -151,6 +176,7 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
   }
   await appendTimelineEvent(run.runDir, { type: "git.run_branch_created", sessionId: run.runId, metadata: { baseBranch, baseCommit: git.baseCommit, runBranch, prTargetBranch } });
   codingResult.diffCheck = await collectWorkspaceDiffCheck(codingResult.workspacePath);
+  Object.assign(codingResult, initialInstructionMetadata);
   codingArtifacts = await writeCodingArtifacts(run.runDir, analysis.taskBrief, codingResult);
   let validationReport = await validationRunner.run({ workspacePath: codingResult.workspacePath, commands: validationCommands });
   let validationReportPath = await writeValidationReport(run.runDir, validationReport);
@@ -166,6 +192,7 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
     workspacePath: codingResult.workspacePath,
     artifacts: artifactRefs(run.runDir, {
       codingResultPath: codingArtifacts.codingResultPath,
+      codingInstructionPath: path.join(run.runDir, initialInstructionMetadata.instructionArtifactPath!),
       diffPath: codingArtifacts.diffPath,
       statusPath: codingArtifacts.statusPath,
       taskBriefPath: codingArtifacts.taskBriefPath,
@@ -241,16 +268,25 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
     const beforeReview = reviewReport;
     const beforeValidationStatus = validationReport.status;
     currentStep = await import("../runs/sessionModel.js").then(m => m.loadStep(run.runDir, currentStep.stepId));
-    currentAttempt = await startAttempt({ runDir: run.runDir, step: currentStep, prompt: reworkPackage.mustChange.join("\n"), runtimeMode: requestedSandboxMode });
+    const reworkInstruction = buildReworkCodexInstruction({ originalTask: goal, taskBrief: analysis.taskBrief, reworkPackage, previousAttemptResult: codingResult.finalResponse, reviewVerdict: reviewReport.verdict });
+    currentAttempt = await startAttempt({ runDir: run.runDir, step: currentStep, prompt: reworkInstruction, runtimeMode: requestedSandboxMode });
+    const reworkInstructionMetadata = await writeCodingInstructionAudit({ runDir: run.runDir, artifactDir: attemptDir, sessionAttemptDir: sessionAttemptDir(run.runDir, currentStep, currentAttempt), instruction: reworkInstruction, originalTask: goal, attemptNumber: currentAttempt.order });
     await assertWorkspaceBranch(run.runDir);
     codingResult = await codingWorker.continueTask({
+      originalTask: goal,
+      taskBrief: analysis.taskBrief,
       threadId: codingResult.threadId,
       workspacePath: codingResult.workspacePath,
       workspaceRoot,
       reworkPackage,
       sandboxMode: requestedSandboxMode,
+      approvalPolicy: "never",
+      attemptNumber: currentAttempt.order,
+      previousAttemptResult: codingResult.finalResponse,
+      reviewVerdict: reviewReport.verdict,
     });
     codingResult.diffCheck = await collectWorkspaceDiffCheck(codingResult.workspacePath);
+    Object.assign(codingResult, reworkInstructionMetadata);
     await writeCodingArtifacts(attemptDir, analysis.taskBrief, codingResult);
     validationReport = await validationRunner.run({ workspacePath: codingResult.workspacePath, commands: validationCommands });
     validationReportPath = await writeValidationReport(attemptDir, validationReport);
@@ -266,6 +302,7 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
       workspacePath: codingResult.workspacePath,
       artifacts: artifactRefs(run.runDir, {
         codingResultPath: path.join(attemptDir, "coding-result.json"),
+        codingInstructionPath: path.join(attemptDir, "coding-instruction.md"),
         diffPath: path.join(attemptDir, "workspace.diff"),
         statusPath: path.join(attemptDir, "workspace-status.txt"),
         taskBriefPath: path.join(attemptDir, "task-brief.json"),

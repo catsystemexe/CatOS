@@ -31,6 +31,7 @@ export type DecisionActor = "human" | "system";
 
 export type ArtifactRefs = {
   codingResultPath?: string;
+  codingInstructionPath?: string;
   diffPath?: string;
   statusPath?: string;
   taskBriefPath?: string;
