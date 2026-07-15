@@ -59,6 +59,24 @@ Examples:
 - CODEX bwrap failure is blocked, not completed.
 - Placeholder validation is SKIPPED, not PASS.
 
+## Branch terminology
+
+The handoff must distinguish:
+
+- source/base branch: the long-lived branch from which the session snapshot was created,
+- session branch: the disposable branch used by Codex,
+- PR target branch: the long-lived branch receiving the reviewed changes.
+
+For the current AutoCodex development workflow:
+
+- source/base branch: autocodex
+- session branch: generated per Codex session
+- PR target branch: autocodex
+
+Generic labels such as `work` must not replace the concrete branch name in the
+handoff when the concrete target is known.
+
+
 ## Validation actually performed
 
 List only commands that were actually run.
