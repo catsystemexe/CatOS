@@ -543,7 +543,7 @@ test("CODEX report renders structured diff-check result", async () => {
 
 test("Review JSON, Markdown, and FINAL report agree after diff-check reconciliation", async () => {
   const f = await fixture();
-  await writeBase(f, "ACCEPT", "SKIPPED");
+  await writeBase(f, "ACCEPT", "BLOCKED");
   const coding = JSON.parse(await readFile(path.join(f.attemptDir, "coding-result.json"), "utf8"));
   coding.diffCheck = {
     command: "git diff --check",
