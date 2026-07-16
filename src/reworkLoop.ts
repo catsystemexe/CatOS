@@ -5,6 +5,7 @@ import { finalResultSchema, type FinalResult } from "./schemas/finalResult.js";
 import type { TaskBrief } from "./schemas/taskBrief.js";
 import type { CodingResult } from "./codingWorker.js";
 import type { ReviewReport } from "./schemas/reviewReport.js";
+import type { PlannedStep } from "./executionPlan.js";
 import type { ValidationReport } from "./validationRunner.js";
 import { ensureStepResultArtifacts, writeSessionReport } from "./finalExport.js";
 
@@ -41,16 +42,36 @@ export function buildReworkPackage(input: {
 }
 
 function normalizeFingerprintPart(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, " ");
+  return value.trim().toLowerCase().replace(/[\p{P}\p{S}]+/gu, " ").replace(/\s+/g, " ").trim();
 }
 
 export function blockingFindingFingerprint(finding: ReviewReport["blockingFindings"][number]): string {
   return [finding.title, finding.evidence, finding.requiredChange].map(normalizeFingerprintPart).join("\u241f");
 }
 
+export function normalizeReworkFindings(report: ReviewReport): string[] {
+  return report.blockingFindings.map(blockingFindingFingerprint).filter(Boolean).sort();
+}
+
+export function hasActionableRework(report: ReviewReport): boolean {
+  return report.verdict === "REWORK" && normalizeReworkFindings(report).length > 0 && report.blockingFindings.some((finding) => normalizeFingerprintPart(finding.requiredChange).length > 0);
+}
+
 export function hasRepeatedBlockingFinding(previous: ReviewReport, current: ReviewReport): boolean {
-  const previousFingerprints = new Set(previous.blockingFindings.map(blockingFindingFingerprint));
-  return current.blockingFindings.some((finding) => previousFingerprints.has(blockingFindingFingerprint(finding)));
+  const previousFingerprints = normalizeReworkFindings(previous);
+  const currentFingerprints = normalizeReworkFindings(current);
+  return previousFingerprints.length > 0 && previousFingerprints.length === currentFingerprints.length && previousFingerprints.every((value, index) => value === currentFingerprints[index]);
+}
+
+export function hasContradictoryReworkInstruction(report: ReviewReport, step: PlannedStep): boolean {
+  const stepText = normalizeFingerprintPart([step.instruction, ...step.acceptanceCriteria, ...(step.constraints ?? [])].join(" "));
+  const requiredChanges = report.blockingFindings.map((finding) => normalizeFingerprintPart(finding.requiredChange));
+  if (/do not|must not|without|never/.test(stepText)) {
+    const fileMentions = Array.from(stepText.matchAll(/(?:do not|must not|without|never)[^.]*/g)).map((m) => m[0]);
+    if (requiredChanges.some((change) => fileMentions.some((rule) => rule && change.includes(rule.replace(/^(do not|must not|without|never)\s+/, ""))))) return true;
+  }
+  if (/exactly one file/.test(stepText) && requiredChanges.some((change) => /create|modify|edit|delete/.test(change) && /additional|another|second|extra|unrelated/.test(change))) return true;
+  return false;
 }
 
 export async function writeReworkPackage(attemptDir: string, reworkPackage: ReworkPackage): Promise<string> {

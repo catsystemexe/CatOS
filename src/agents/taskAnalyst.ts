@@ -1,9 +1,17 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { taskBriefSchema, type TaskBrief } from "../schemas/taskBrief.js";
+import type { ExecutionPlan, PlannedStep, StepResult } from "../executionPlan.js";
 
 export type TaskAnalystProvider = {
   analyze(input: TaskAnalystProviderInput): Promise<unknown>;
+};
+
+export type StepAnalysisInput = {
+  originalTask: string;
+  executionPlan: ExecutionPlan;
+  currentStep: PlannedStep;
+  acceptedDependencies: StepResult[];
 };
 
 export type TaskAnalystProviderInput = {
@@ -12,12 +20,14 @@ export type TaskAnalystProviderInput = {
   retry: boolean;
   previousInvalidOutput?: unknown;
   validationError?: string;
+  stepAnalysis?: StepAnalysisInput;
 };
 
 export type AnalyzeTaskOptions = {
   provider?: TaskAnalystProvider;
   apiKey?: string;
   model?: string;
+  stepAnalysis?: StepAnalysisInput;
 };
 
 export type AnalyzeTaskResult = {
@@ -44,6 +54,7 @@ export async function analyzeTaskBrief(goal: string, projectId: string, options:
       retry: attempt === 2,
       previousInvalidOutput,
       validationError,
+      stepAnalysis: options.stepAnalysis,
     });
     const parsed = taskBriefSchema.safeParse(output);
 
@@ -58,8 +69,9 @@ export async function analyzeTaskBrief(goal: string, projectId: string, options:
   throw new TaskBriefValidationError(`Task Analyst returned invalid TaskBrief after 2 attempts: ${validationError ?? "unknown validation error"}`, 2);
 }
 
-export async function writeTaskBrief(runDir: string, taskBrief: TaskBrief): Promise<string> {
-  const taskBriefPath = path.join(runDir, "task-brief.json");
+export async function writeTaskBrief(runDir: string, taskBrief: TaskBrief, relativePath = "task-brief.json"): Promise<string> {
+  const taskBriefPath = path.join(runDir, relativePath);
+  await import("node:fs/promises").then((fs) => fs.mkdir(path.dirname(taskBriefPath), { recursive: true }));
   await writeFile(taskBriefPath, `${JSON.stringify(taskBrief, null, 2)}\n`, "utf8");
   return taskBriefPath;
 }
@@ -92,7 +104,11 @@ export function createOpenAITaskAnalystProvider(options: { apiKey?: string; mode
         ? `The previous TaskBrief was invalid. Validation error: ${input.validationError}\nPrevious invalid output: ${JSON.stringify(input.previousInvalidOutput)}\nReturn a corrected TaskBrief for project ${input.projectId} and goal:\n${input.goal}`
         : `Create a TaskBrief for project ${input.projectId} and goal:\n${input.goal}`;
 
-      const result = await run(agent, prompt);
+      const stepContext = input.stepAnalysis
+        ? `\n\nAnalyze only the current Planned Step. Do not invent, reorder, or replace the ExecutionPlan.\nStepAnalysisInput:\n${JSON.stringify(input.stepAnalysis, null, 2)}`
+        : "";
+
+      const result = await run(agent, `${prompt}${stepContext}`);
       return result.finalOutput;
     },
   };

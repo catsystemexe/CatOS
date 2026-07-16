@@ -400,11 +400,15 @@ describe("runCommand rework loop", () => {
       reworkReason: expect.stringContaining("REWORK summary"),
     });
     expect(reviewInputs[1]!.reworkContext?.reworkPackage.mustChange).toEqual(["Change finding-1"]);
-    const reworkPackage = JSON.parse(await readFile(path.join(runDir, "attempts", "01", "rework-package.json"), "utf8"));
+    const stepsForReworkPackage = await readdir(path.join(runDir, "steps"));
+    const attemptsForReworkPackage = await readdir(path.join(runDir, "steps", stepsForReworkPackage[0]!, "attempts"));
+    const attemptOneDir = path.join(runDir, "steps", stepsForReworkPackage[0]!, "attempts", attemptsForReworkPackage[0]!);
+    const attemptTwoDir = path.join(runDir, "steps", stepsForReworkPackage[0]!, "attempts", attemptsForReworkPackage[1]!);
+    const reworkPackage = JSON.parse(await readFile(path.join(attemptOneDir, "rework", "rework-package.json"), "utf8"));
     expect(reworkPackage.mustChange).toEqual(["Change finding-1"]);
-    await expect(readFile(path.join(runDir, "attempts", "01", "coding-result.json"), "utf8")).resolves.toContain("thread-1");
-    await expect(readFile(path.join(runDir, "attempts", "01", "validation-report.json"), "utf8")).resolves.toContain("PASS");
-    await expect(readFile(path.join(runDir, "attempts", "01", "review-report.json"), "utf8")).resolves.toContain("ACCEPT");
+    await expect(readFile(path.join(attemptTwoDir, "coding-result.json"), "utf8")).resolves.toContain("thread-1");
+    await expect(readFile(path.join(attemptTwoDir, "validation-report.json"), "utf8")).resolves.toContain("PASS");
+    await expect(readFile(path.join(attemptTwoDir, "review-report.json"), "utf8")).resolves.toContain("ACCEPT");
     const rootCoding = await readFile(path.join(runDir, "coding-result.json"), "utf8");
     expect(rootCoding).toContain("initial done");
     const finalResult = JSON.parse(await readFile(path.join(runDir, "final-result.json"), "utf8"));
@@ -422,7 +426,7 @@ describe("runCommand rework loop", () => {
     expect(attemptTwoInstruction).toContain("Change finding-1");
     expect(attemptTwoInstruction).not.toBe("Change finding-1");
     const initialCodingResult = JSON.parse(await readFile(path.join(runDir, "coding-result.json"), "utf8"));
-    const reworkCodingResult = JSON.parse(await readFile(path.join(runDir, "attempts", "01", "coding-result.json"), "utf8"));
+    const reworkCodingResult = JSON.parse(await readFile(path.join(attemptTwoDir, "coding-result.json"), "utf8"));
     expect(initialCodingResult.originalTaskSha256).toBe(reworkCodingResult.originalTaskSha256);
     expect(initialCodingResult.renderedInstructionSha256).not.toBe(reworkCodingResult.renderedInstructionSha256);
     expect(path.isAbsolute(reworkCodingResult.instructionArtifactPath)).toBe(false);
@@ -451,7 +455,9 @@ describe("runCommand rework loop", () => {
     const [runId] = await readdir(runsDir);
     const finalResult = JSON.parse(await readFile(path.join(runsDir, runId!, "final-result.json"), "utf8"));
     expect(finalResult.status).toBe("REWORK_LIMIT_REACHED");
-    expect(await readdir(path.join(runsDir, runId!, "attempts"))).toEqual(["01"]);
+    const steps = await readdir(path.join(runsDir, runId!, "steps"));
+    const attempts = await readdir(path.join(runsDir, runId!, "steps", steps[0]!, "attempts"));
+    expect(attempts).toHaveLength(2);
   });
 
   it("converts repeated blocking findings and REWORK without findings to HUMAN_REQUIRED", async () => {
@@ -484,11 +490,64 @@ describe("runCommand rework loop", () => {
     await runCommand(["--project", "demo", "--task", "Test task"], { cwd, runsDir, taskAnalystProvider: provider, codingWorker, validationRunner: validationRunnerWith(["FAIL", "FAIL", "FAIL"]), reviewerProvider });
     const [runId] = await readdir(runsDir);
     const runDir = path.join(runsDir, runId!);
-    expect(await readdir(path.join(runDir, "attempts"))).toEqual(["01", "02"]);
-    await expect(readFile(path.join(runDir, "attempts", "01", "coding-result.json"), "utf8")).resolves.toContain("rework1 done");
-    await expect(readFile(path.join(runDir, "attempts", "02", "coding-result.json"), "utf8")).resolves.toContain("rework2 done");
+    const steps = await readdir(path.join(runDir, "steps"));
+    const attempts = await readdir(path.join(runDir, "steps", steps[0]!, "attempts"));
+    expect(attempts).toHaveLength(3);
+    await expect(readFile(path.join(runDir, "steps", steps[0]!, "attempts", attempts[1]!, "coding-result.json"), "utf8")).resolves.toContain("rework1 done");
+    await expect(readFile(path.join(runDir, "steps", steps[0]!, "attempts", attempts[2]!, "coding-result.json"), "utf8")).resolves.toContain("rework2 done");
     await expect(readFile(path.join(runDir, "coding-result.json"), "utf8")).resolves.toContain("initial done");
     await expect(readFile(path.join(runDir, "final-result.json"), "utf8")).resolves.toContain("REWORK_LIMIT_REACHED");
+  });
+
+  it("analyzes each explicit Planned Step once and stores separate Step TaskBriefs", async () => {
+    const { cwd, runsDir } = await setupRunFixture();
+    const plan = {
+      schemaVersion: 1 as const,
+      objective: "Four step repair",
+      originalTask: "Complete the explicit four step repair.",
+      steps: [
+        { id: "audit", sequence: 1, title: "Audit", instruction: "Audit exactly.", acceptanceCriteria: ["audit accepted"], expectedArtifacts: ["audit.md"], validationPolicy: "optional" as const, dependsOn: [] },
+        { id: "findings", sequence: 2, title: "Findings", instruction: "Write findings exactly.", acceptanceCriteria: ["findings accepted"], expectedArtifacts: ["findings.md"], validationPolicy: "optional" as const, dependsOn: ["audit"] },
+        { id: "solution", sequence: 3, title: "Solution", instruction: "Design solution exactly.", acceptanceCriteria: ["solution accepted"], expectedArtifacts: ["solution.md"], validationPolicy: "not-applicable" as const, dependsOn: ["findings"] },
+        { id: "implementation", sequence: 4, title: "Implementation", instruction: "Implement exactly.", acceptanceCriteria: ["implementation accepted"], expectedArtifacts: [], validationPolicy: "required" as const, dependsOn: ["solution"] },
+      ],
+    };
+    const analystCalls: string[] = [];
+    const provider: TaskAnalystProvider = { analyze: async (input) => {
+      analystCalls.push(`${input.stepAnalysis?.currentStep.id}:${input.stepAnalysis?.currentStep.instruction}`);
+      return { ...brief, objective: `Brief ${input.stepAnalysis?.currentStep.id}`, codexInstruction: `Guidance for ${input.stepAnalysis?.currentStep.id}`, acceptanceCriteria: [`brief ${input.stepAnalysis?.currentStep.id}`] };
+    } };
+    const codingBriefs: TaskBrief[] = [];
+    const codingWorker: CodingWorker = {
+      executeTask: async (input) => { codingBriefs.push(input.taskBrief); return codingResult(`thread-${input.currentStep?.id}`, await createMockWorkspace(input), input.currentStep?.id ?? "step"); },
+      continueTask: async () => { throw new Error("unexpected rework"); },
+    };
+    const reviewerProvider: ReviewerProvider = { review: async () => review("ACCEPT") };
+    await runCommand(["--project", "demo", "--task", plan.originalTask], { cwd, runsDir, executionPlan: plan, taskAnalystProvider: provider, codingWorker, validationRunner: validationRunnerWith(["PASS", "PASS", "PASS", "PASS"]), reviewerProvider });
+    const [runId] = await readdir(runsDir);
+    const runDir = path.join(runsDir, runId!);
+    expect(analystCalls).toEqual(plan.steps.map((step) => `${step.id}:${step.instruction}`));
+    expect(codingBriefs.map((b) => b.codexInstruction)).toEqual(["Guidance for audit", "Guidance for findings", "Guidance for solution", "Guidance for implementation"]);
+    const stepDirs = await readdir(path.join(runDir, "steps"));
+    expect(stepDirs).toHaveLength(4);
+    for (const [index, dir] of stepDirs.entries()) {
+      const persisted = JSON.parse(await readFile(path.join(runDir, "steps", dir, "task-brief.json"), "utf8"));
+      expect(persisted).toMatchObject({ objective: `Brief ${plan.steps[index]!.id}`, codexInstruction: `Guidance for ${plan.steps[index]!.id}`, acceptanceCriteria: [`brief ${plan.steps[index]!.id}`], nonGoals: brief.nonGoals, riskLevel: brief.riskLevel });
+    }
+  });
+
+  it("escalates contradictory Step rework to HUMAN_REQUIRED before another Coding attempt", async () => {
+    const { cwd, runsDir } = await setupRunFixture(2);
+    const plan = { schemaVersion: 1 as const, objective: "Contradiction", originalTask: "Create exactly one file only.", steps: [{ id: "only", sequence: 1, title: "Only", instruction: "Create exactly one file and do not create additional files.", acceptanceCriteria: ["Only one file changed"], expectedArtifacts: ["only.md"], validationPolicy: "optional" as const, dependsOn: [] }] };
+    const provider: TaskAnalystProvider = { analyze: async () => brief };
+    let continueCount = 0;
+    const codingWorker: CodingWorker = { executeTask: async (input) => codingResult("thread-1", await createMockWorkspace(input), "initial"), continueTask: async (input) => { continueCount += 1; return codingResult(input.threadId, input.workspacePath, "rework"); } };
+    const reviewerProvider: ReviewerProvider = { review: async () => ({ ...review("REWORK", "contradiction"), blockingFindings: [{ id: "contradiction", title: "Need extra file", evidence: "Reviewer asked for extra scope", requiredChange: "Create an additional file." }] }) };
+    await runCommand(["--project", "demo", "--task", plan.originalTask], { cwd, runsDir, executionPlan: plan, taskAnalystProvider: provider, codingWorker, validationRunner: validationRunnerWith(["FAIL"]), reviewerProvider });
+    const [runId] = await readdir(runsDir);
+    const finalResult = JSON.parse(await readFile(path.join(runsDir, runId!, "final-result.json"), "utf8"));
+    expect(finalResult.status).toBe("HUMAN_REQUIRED");
+    expect(continueCount).toBe(0);
   });
 });
 // report-consistency regression: the UI contract test keeps danger-full-access behavior covered.

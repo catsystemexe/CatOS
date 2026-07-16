@@ -421,7 +421,7 @@ type PlannedStep = {
 };
 ```
 
-The Task Analyst may validate and normalize an explicitly supplied plan, but it must not merge, reorder, replace, silently remove, or substantially invent explicit Steps. Automatic free-form task decomposition is outside the MVP contract.
+The Task Analyst remains active for every Planned Step. ExecutionPlan defines orchestration only; it does not replace TaskBrief. For each Step, the coordinator supplies the original user task, complete plan, current Planned Step, and accepted dependency results to Task Analyst. The returned TaskBrief is Step-level derived implementation guidance and is additive. The current Step instruction remains authoritative and must be preserved verbatim. The Task Analyst must not merge, reorder, replace, silently remove, or substantially invent explicit Steps. Automatic free-form task decomposition is outside the MVP contract.
 
 Step and Attempt are distinct concepts:
 
@@ -435,16 +435,17 @@ Before the first Step starts, the coordinator writes immutable run-level plan ar
 - `execution-plan.json` as the authoritative normalized contract,
 - `EXECUTION_PLAN.md` as the human-readable plan summary.
 
-Each Step receives a stable directory containing `step.json`, `step-state.json`, append-only attempt directories, and, after acceptance, `step-result.json` plus `STEP_REPORT.md`. Step state is explicit and is not inferred only from the latest Attempt directory.
+Each Step receives a stable directory containing `step.json`, `step-state.json`, Step-scoped `task-brief.json`, append-only attempt directories, and, after acceptance, `step-result.json` plus `STEP_REPORT.md`. The canonical Attempt path is `runs/<run-id>/steps/<step-directory>/attempts/<attempt-directory>`; full Attempt directories are not mirrored at the run root. Step state is explicit and is not inferred only from the latest Attempt directory.
 
 Steps execute sequentially in deterministic plan order. A Step may start only after all declared dependencies have accepted `step-result.json` boundaries. The existing Coding → Validation → Review attempt loop is reused within each Step. Reviewer progression gates use Step-level semantics:
 
 - `ACCEPT` maps to `ACCEPT_STEP`, allowing dependent Steps to begin,
-- `REWORK` maps to `REWORK_STEP`, creating another Attempt in the current Step,
-- `HUMAN_REQUIRED` stops before dependent Steps,
+- `REWORK` maps to `REWORK_STEP`, creating another Attempt in the current Step only when the rework is actionable,
+- unusable REWORK, repeated equivalent blocking findings, contradictory rework instructions, or a human decision requirement escalates to `HUMAN_REQUIRED` and stops before dependent Steps,
+- `REWORK_LIMIT_REACHED` is reserved for exhaustion of the configured number of meaningful rework Attempts,
 - `STOP` terminates the run without creating additional executable Steps.
 
-Every multi-step Coding prompt includes the original user task verbatim, a complete execution-plan status summary, the current Step identity/title/instruction/acceptance criteria, expected artifacts, validation policy, constraints, approved dependency results, and an explicit rule to complete only the current Planned Step without pre-empting future Steps.
+Every multi-step Coding prompt includes the original user task verbatim, a complete execution-plan status summary, the current Step identity/title/instruction/acceptance criteria, expected artifacts, validation policy, constraints, approved dependency results, the derived TaskBrief guidance in a separate section, the derived TaskBrief acceptance criteria where useful, and an explicit rule to complete only the current Planned Step without pre-empting future Steps.
 
 Accepted dependency context is passed only through accepted `step-result.json` records and approved artifacts referenced by those records. Failed Attempt output and unaccepted Review drafts are not dependency truth.
 
