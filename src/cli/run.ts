@@ -47,9 +47,11 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
 
   const packageDir = path.resolve(cwd, taskPackageArg);
   const runId = options.runId ?? randomUUID();
+  const artifactDir = path.resolve(cwd, "runs", runId);
   const preflight = options.preflight ?? runPreflight;
   const prepared: PreflightResult = await preflight({
     packageDir,
+    artifactDir,
     repositoryPath: loaded.absoluteRepoPath,
     workspaceRoot: resolveWorkspaceRoot(loaded.config.execution.workspaceRoot),
     runId,
@@ -61,7 +63,7 @@ export async function runCommand(args: string[], options: RunCliOptions = {}): P
     const result = await (options.orchestrator ?? orchestrate)({
       task: prepared.task,
       workspacePath: prepared.workspacePath,
-      artifactDir: path.join(packageDir, "artifacts"),
+      artifactDir,
       runId,
       executable: process.env.CATOS_CODEX_EXECUTABLE ?? "codex",
       maxReworks: loaded.config.workflow.maxReworkAttempts,
