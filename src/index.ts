@@ -7,8 +7,12 @@ import { continuePackageCommand } from "./cli/continuePackage.js";
 import { runStepCommand } from "./cli/runStep.js";
 import { uiCommand } from "./uiServer.js";
 import { runtimeWriteSmokeCommand } from "./cli/runtimeWriteSmoke.js";
+import { pathToFileURL } from "node:url";
 
-async function main(): Promise<void> {
+/** Retained only for legacy artifact workflows; never reachable from v2 `run`. */
+export const legacyCommands = Object.freeze(["decide", "commit", "run-step", "continue-package", "review", "step"]);
+
+export async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
 
   if (command === "run") {
@@ -16,6 +20,8 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Legacy commands remain available only for existing audit artifacts; they
+  // are not invoked by the v2 production run path.
   if (command === "decide") {
     await decideCommand(args);
     return;
@@ -56,11 +62,13 @@ async function main(): Promise<void> {
     return;
   }
 
-  throw new Error("Neznámý nebo chybějící příkaz. Použití: npm run catos -- run --project demo --task \"Testovací úkol\" nebo npm run catos -- decide --run <runId> --decision approve nebo npm run catos -- step --run <runId> --title \"Další krok\" --request \"Zadání\" nebo npm run catos -- commit --run <runId> nebo npm run catos -- review --run <runId> nebo npm run catos -- continue-package --run <runId> nebo npm run catos -- run-step --run <runId> nebo npm run catos -- runtime-write-smoke --repo <path> --base-branch autocodex nebo npm run ui");
+  throw new Error("Neznámý nebo chybějící příkaz. V2: npm run catos -- run --project demo --task-package <directory>. Legacy: decide, commit, run-step, continue-package a review; příkaz step je také legacy. UI nepouští v2 run.");
 }
 
-main().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(`Chyba: ${message}`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  main().catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Chyba: ${message}`);
+    process.exitCode = 1;
+  });
+}

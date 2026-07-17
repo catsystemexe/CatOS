@@ -6,7 +6,7 @@
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-  <header class="topbar">CatOS AutoCodex | <span id="runNo">RUN #-</span> | <span id="status">idle</span> | <span id="elapsed">00:00</span></header>
+  <header class="topbar">CatOS AutoCodex v2 | Task Package required | <span id="status">CLI only</span></header>
   <main class="app-layout">
     <section class="setup-panel">
       <h2>SETUP</h2>
@@ -25,10 +25,10 @@
         <div><strong>Base branch:</strong> <span id="baseBranch" class="value-readout inline-readout">-</span></div>
         <div><strong>Snapshot:</strong> automatic on RUN</div>
       </div>
-      <label class="task-field" for="task"><span>Task</span><textarea id="task"></textarea></label>
-      <p id="runReason" class="message" role="status" aria-live="polite"></p>
+      <label class="task-field" for="task"><span>Task Package (v2)</span><textarea id="task" readonly>Use: npm run catos -- run --project &lt;id&gt; --task-package &lt;directory&gt;</textarea></label>
+      <p id="runReason" class="message" role="status" aria-live="polite">The UI start surface is legacy-disabled: v2 runs require a project and approved Task Package in the CLI.</p>
       <div class="run-actions">
-        <button id="run" class="primary" type="button">RUN</button>
+        <button id="run" class="primary" type="button" disabled>RUN (CLI ONLY)</button>
         <button id="stop" type="button" disabled>STOP</button>
       </div>
     </section>

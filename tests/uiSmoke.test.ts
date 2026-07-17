@@ -9,7 +9,7 @@ async function withUiServer<T>(run:(baseUrl:string)=>Promise<T>){
   try{return await run(`http://127.0.0.1:${port}`);} finally{await new Promise<void>(r=>server.close(()=>r()));}
 }
 
-test("UI page renders the two-panel repository-first AutoCodex layout", async () => {
+test("UI page renders the legacy-disabled v2 Task Package start surface", async () => {
   await withUiServer(async (baseUrl) => {
     const res = await fetch(`${baseUrl}/`);
     const html = await res.text();
@@ -22,7 +22,8 @@ test("UI page renders the two-panel repository-first AutoCodex layout", async ()
     expect(html).toContain("Branch");
     expect(html).toContain("Base branch");
     expect(html).not.toContain("PR target");
-    expect(html).toContain("Task");
+    expect(html).toContain("Task Package (v2)");
+    expect(html).toContain("CLI only");
 
     expect(html).toContain("RUN");
     expect(html).toContain("VIEW");
@@ -37,9 +38,9 @@ test("UI page renders the two-panel repository-first AutoCodex layout", async ()
     expect(html).toContain(
       'id="baseBranch" class="value-readout inline-readout"',
     );
-    expect(html).toContain('<textarea id="task"></textarea>');
+    expect(html).toContain('<textarea id="task" readonly>');
     expect(html).toContain(
-      '<button id="run" class="primary" type="button">RUN</button>',
+      '<button id="run" class="primary" type="button" disabled>RUN (CLI ONLY)</button>',
     );
     expect(html).toContain(
       '<button id="stop" type="button" disabled>STOP</button>',
