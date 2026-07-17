@@ -8,16 +8,16 @@ import { createCodexChildEnvironment } from "./runtimePolicy.js";
 import { parseTaskPackage, readTaskPackage, type TaskPackage } from "./taskPackage.js";
 import { realpathWithinPackage } from "./taskPackagePaths.js";
 import { createExternalWorktree, type GitCommand } from "./worktree.js";
+import { runBaselineChecks } from "./checks.js";
 
 export type BaselineResult = { id: string; required: boolean; mustPassAtBaseline: boolean; exitCode: number; passed: boolean };
-export type BaselineRunner = (argv: string[], cwd: string, env: NodeJS.ProcessEnv) => Promise<{ exitCode: number }>;
 export type PreflightResult = { task: TaskPackage; workspacePath: string; baseCommitSha: string; baseline: BaselineResult[]; runtimeMetadata: { policy: string; allowedNames: string[]; deniedNames: string[] }; release(): Promise<void> };
 
 /**
  * Performs all non-model checks before an attempt exists.  Call release() after
  * the run ends; locks intentionally span worktree creation and its owner run.
  */
-export async function runPreflight(input: { packageDir: string; repositoryPath: string; workspaceRoot: string; runId: string; git: GitCommand; baselineRunner: BaselineRunner; cli?: CodexCli; catosRoot?: string; minimumCodexVersion?: string; environment?: NodeJS.ProcessEnv }): Promise<PreflightResult> {
+export async function runPreflight(input: { packageDir: string; repositoryPath: string; workspaceRoot: string; runId: string; git: GitCommand; cli?: CodexCli; catosRoot?: string; minimumCodexVersion?: string; environment?: NodeJS.ProcessEnv }): Promise<PreflightResult> {
   const packageDir = await realpath(input.packageDir);
   const repositoryPath = await realpath(input.repositoryPath);
   // Schema validation intentionally precedes locking so malformed v2 packages
@@ -36,15 +36,12 @@ export async function runPreflight(input: { packageDir: string; repositoryPath: 
     const cliResult = await assertCodexCapabilities(input.cli ?? createCodexCli(), input.minimumCodexVersion, input.environment);
     const worktree = await createExternalWorktree({ repositoryPath, workspaceRoot: input.workspaceRoot, runId: input.runId, baseCommitSha: task.baseCommitSha, git: input.git, catosRoot: input.catosRoot });
     const runtime = createCodexChildEnvironment(input.environment);
-    const baseline: BaselineResult[] = [];
-    for (const check of task.checks) {
-      const cwd = check.cwd ? await resolveCheckCwd(worktree.workspacePath, check.cwd, check.id) : worktree.workspacePath;
-      const result = await input.baselineRunner(check.argv, cwd, runtime.env);
-      const record = { id: check.id, required: check.required, mustPassAtBaseline: check.mustPassAtBaseline, exitCode: result.exitCode, passed: result.exitCode === 0 };
-      baseline.push(record);
-      if (check.mustPassAtBaseline && !record.passed) throw new Error(`Baseline check failed: ${check.id}`);
-    }
     const artifacts = path.join(packageDir, "artifacts"); await mkdir(artifacts, { recursive: true });
+    // Baselines use the same no-shell runner as post-commit tests.  This means no
+    // project YAML command string or inherited process environment can enter v2.
+    const baselineReport = await runBaselineChecks({ task, workspacePath: worktree.workspacePath, artifactDir: artifacts, expectedHead: worktree.baseCommitSha, environment: input.environment });
+    const baseline: BaselineResult[] = baselineReport.results.map((result) => ({ id: result.id, required: result.required, mustPassAtBaseline: result.mustPassAtBaseline, exitCode: result.process.exitCode ?? -1, passed: result.status === "PASS" }));
+    if (baselineReport.status !== "PASS") throw new Error(`Baseline check failed: ${baselineReport.results.find((result) => result.status !== "PASS")?.id ?? "test process"}`);
     // Names-only metadata: do not persist environment values, command output, or credentials.
     await atomicWriteJson(artifactPath(packageDir, "runtime.json"), { auth: cliResult.capabilities.auth, codexVersion: cliResult.capabilities.version, environment: runtime.metadata });
     await atomicWriteJson(artifactPath(packageDir, "worktree.json"), { workspacePath: worktree.workspacePath, baseCommitSha: worktree.baseCommitSha });
@@ -52,12 +49,4 @@ export async function runPreflight(input: { packageDir: string; repositoryPath: 
     let released = false;
     return { task, workspacePath: worktree.workspacePath, baseCommitSha: worktree.baseCommitSha, baseline, runtimeMetadata: runtime.metadata, async release() { if (!released) { released = true; await repositoryLock!.release(); await taskLock.release(); } } };
   } catch (error) { await repositoryLock?.release().catch(() => undefined); await taskLock.release().catch(() => undefined); throw error; }
-}
-
-async function resolveCheckCwd(workspacePath: string, relativePath: string, checkId: string): Promise<string> {
-  if (path.isAbsolute(relativePath) || relativePath.includes("\0")) throw new Error(`Baseline check cwd must be relative: ${checkId}`);
-  const resolved = await realpath(path.resolve(workspacePath, relativePath)).catch(() => { throw new Error(`Baseline check cwd must exist within worktree: ${checkId}`); });
-  const relative = path.relative(workspacePath, resolved);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error(`Baseline check cwd escapes worktree: ${checkId}`);
-  return resolved;
 }
