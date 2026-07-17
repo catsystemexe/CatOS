@@ -1,0 +1,2 @@
+export const REVIEW_TEMPLATE_VERSION = "review.v1";
+export const reviewTemplate = `# CatOS Review Session\n\nReview the current step only. This is a fresh, read-only session: do not modify files, commit, or use continuation/resume. Return only JSON matching the supplied schema.\n\n## Frozen Task Package\n{{taskPackage}}\n\n## Current Step\n{{step}}\n\n## Attempt\n{{attempt}}\n\n## Explicit Rework Context\n{{reworkContext}}\n`;

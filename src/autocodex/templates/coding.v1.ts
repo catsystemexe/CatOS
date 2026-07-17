@@ -1,0 +1,2 @@
+export const CODING_TEMPLATE_VERSION = "coding.v1";
+export const codingTemplate = `# CatOS Coding Session\n\nYou implement exactly the current step. Do not begin future steps, alter the task package, commit, create branches/tags, or use continuation/resume. Return only JSON matching the supplied schema.\n\n## Frozen Task Package\n{{taskPackage}}\n\n## Current Step\n{{step}}\n\n## Attempt\n{{attempt}}\n\n## Explicit Rework Context\n{{reworkContext}}\n`;
