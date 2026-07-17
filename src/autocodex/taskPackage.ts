@@ -8,7 +8,7 @@ const sha1 = z.string().regex(/^[a-f0-9]{40}$/i, "must be an immutable 40-charac
 const id = z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/);
 const argv = z.array(z.string().min(1).refine((arg) => !arg.includes("\0"), "argv must not contain NUL")).min(1)
   .refine((items) => items[0] !== "--", "argv must start with an executable");
-export const taskCheckSchema = z.object({ id, argv, required: z.boolean().default(true), cwd: z.string().optional() }).strict();
+export const taskCheckSchema = z.object({ id, argv, required: z.boolean().default(true), mustPassAtBaseline: z.boolean().default(true), cwd: z.string().optional() }).strict();
 export const taskStepSchema = z.object({ id, title: z.string().trim().min(1), dependsOn: z.array(id).default([]), checks: z.array(id).default([]), files: z.array(z.string().min(1)).default([]) }).strict();
 export const taskPackageSchema = z.object({
   schemaVersion: z.literal(2), taskId: id, task: z.string().min(1), baseCommitSha: sha1,
