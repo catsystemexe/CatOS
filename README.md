@@ -4,7 +4,7 @@ CatOS je připravovaná CLI aplikace pro řízení bezpečné a auditovatelné a
 
 ## Aktuální stav MVP
 
-AutoCodex v2 je jediná podporovaná produkční cesta pro `run`. Vyžaduje neměnný, předem schválený **Task Package** s `task.json`; za běhu se nevolá Task Analyst ani Reviewer z OpenAI Agents SDK. V2 používá samostatné Codex CLI coding/review sessions, validuje změny, vytváří pouze lokální CatOS commity a nikdy negeneruje publish/push/PR Git příkazy.
+AutoCodex v2 je jediná podporovaná produkční cesta pro `run`. Vyžaduje neměnný, předem schválený **Task Package** s `task.json`; za běhu se nevolá Task Analyst ani Reviewer z OpenAI Agents SDK. V2 používá samostatné Codex CLI coding/review sessions, validuje změny, vytváří pouze lokální CatOS commity a nikdy negeneruje publish/push/PR Git příkazy. Run evidence se vždy zapisuje mimo Task Package do `runs/<RUN_ID>/`.
 
 ```bash
 npm run catos -- run --project demo --task-package ./task-packages/demo-task

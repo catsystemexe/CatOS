@@ -30,6 +30,5 @@ export function runArtifactPath(runDir: string, artifact: keyof typeof RUN_ARTIF
 export function runStepArtifactPath(runDir: string, stepId: string, attemptId: string, artifact: keyof ReturnType<typeof stepArtifactPaths>): string { return packagePath(runDir, stepArtifactPaths(stepId, attemptId)[artifact]); }
 
 export function taskPackagePaths(packageDir: string) {
-  return { task: path.join(packageDir, TASK_FILE), state: path.join(packageDir, STATE_FILE), events: path.join(packageDir, EVENTS_FILE), lock: path.join(packageDir, LOCK_FILE), artifacts: path.join(packageDir, "artifacts") };
+  return { task: path.join(packageDir, TASK_FILE), state: path.join(packageDir, STATE_FILE), events: path.join(packageDir, EVENTS_FILE), lock: path.join(packageDir, LOCK_FILE) };
 }
-export function artifactPath(packageDir: string, relativeArtifactPath: string): string { const relative = assertPackageRelativePath(relativeArtifactPath); return packagePath(path.join(packageDir, "artifacts"), relative); }
