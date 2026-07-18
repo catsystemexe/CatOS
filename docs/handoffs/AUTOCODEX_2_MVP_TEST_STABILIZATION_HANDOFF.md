@@ -173,3 +173,39 @@ No updated passed/failed/skipped totals were produced. The environment cannot in
 ### Follow-up result
 
 `BLOCKED_ENVIRONMENT`: follow-up corrections are offline-only and no model, API, live AutoCodex Run, push, merge, or publish operation was executed. Complete validation still requires Node 22+ with dependencies installed.
+
+## 14. Superseding offline validation closure — 2026-07-18
+
+This section supersedes only the prior environment-limited validation conclusions in sections 7 and 13. It preserves their historical command results as an audit record: those attempts occurred in a different environment and were later overcome by the validated Replit Shell run below.
+
+### OFFLINE_VERIFIED
+
+| Field | Verified value |
+| --- | --- |
+| Validation runtime | Node `v22.22.0`; npm available and functional |
+| Integration branch | `autocodex` |
+| Validated HEAD before this metadata-only closure | `3b3d77ed97f4a0c9fca5796af1149b1fb19065da` |
+| Git history note | The original Codex-session SHA was replaced in GitHub history by the merge history of PR #73 and PR #74; merge, squash/rebase, and isolated-checkout SHAs need not match. |
+| `npm run typecheck` | PASS |
+| Targeted stabilization tests | PASS |
+| Full test suite | PASS — 26/26 test files and 253/253 tests |
+| `npm run build` | PASS |
+| Dist entrypoint smoke | PASS |
+| `git diff --check` | PASS |
+
+The observed legacy `CodexSdkWorker` warnings about explicit `danger-full-access` occurred in tests that intentionally exercise that legacy behavior. They are not use of `danger-full-access` in the production AutoCodex v2 route.
+
+**Result: `READY_FOR_MERGE` for the offline stabilization gate.** This is an offline verification result only; it does not establish operational readiness of a live AutoCodex v2 Run.
+
+### LIVE_UNVERIFIED
+
+No model, API, live Run, push, merge, or publish operation was performed for this closure. The following live gates remain unverified:
+
+1. Codex CLI version and capability preflight in the target runtime.
+2. `codex login status` using ChatGPT authentication.
+3. A real workspace-write Coding session.
+4. A real read-only Review session.
+5. A complete live Coding → CatOS commit → Tests → Review cycle.
+6. Live REWORK and BLOCKED scenarios.
+
+The MVP is therefore **OFFLINE_VERIFIED** and **LIVE_UNVERIFIED**, not operationally verified.

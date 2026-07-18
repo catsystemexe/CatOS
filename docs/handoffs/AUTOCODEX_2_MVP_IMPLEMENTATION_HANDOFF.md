@@ -63,3 +63,17 @@ Rejected production inputs: `--task` and `--execution-plan`. There is no Analyst
 3. Review `task.json`: SHA is immutable/reachable, steps have explicit file rules, and checks are safe argv vectors with correct baseline policy.
 4. Confirm the project repository is clean enough for a detached external worktree and has sufficient disk/permissions under `execution.workspaceRoot` (or `CATOS_WORKSPACE_ROOT`).
 5. Run the command once with an audited package; inspect `artifacts/runtime.json`, baseline evidence, per-attempt validation/commit/test/review evidence, and final manifest before relying on automation.
+
+## Git workflow and handoff identity
+
+`autocodex` is the canonical integration branch in GitHub and Replit. A Codex session normally works on an isolated branch such as `work` or `codex/...`; the two branch names therefore need not match.
+
+Record the session SHA, implementation SHA, PR SHA, GitHub merge SHA, and Replit HEAD separately. Merge, squash/rebase, and isolated-checkout workflows may legitimately produce different values, so a branch-name or SHA difference alone is not a blocker. A human selects the PR target, reviews and performs the merge, and pulls the merged integration branch into Replit; Codex does not perform those operations.
+
+## Offline validation status
+
+**OFFLINE_VERIFIED:** Node 22 Replit validation passed `npm run typecheck`, targeted stabilization tests, `npm test` (253/253 tests across 26/26 test files), `npm run build`, and the built `dist` entrypoint smoke. The v2 UI remains CLI-only: UI start is disabled and the supported entrypoint requires both `--project` and `--task-package`.
+
+Task Packages remain immutable authorities, and v2 Run audit artifacts remain under `runs/<RUN_ID>/`. This offline result does not validate live model execution.
+
+**LIVE_UNVERIFIED:** A target-runtime Codex CLI version/capability preflight, `codex login status` with ChatGPT authentication, real workspace-write Coding, real read-only Review, the complete Coding → commit → Tests → Review cycle, and live REWORK and BLOCKED scenarios have not yet been run.
