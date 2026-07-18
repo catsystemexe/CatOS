@@ -173,3 +173,45 @@ No updated passed/failed/skipped totals were produced. The environment cannot in
 ### Follow-up result
 
 `BLOCKED_ENVIRONMENT`: follow-up corrections are offline-only and no model, API, live AutoCodex Run, push, merge, or publish operation was executed. Complete validation still requires Node 22+ with dependencies installed.
+
+## 14. Offline stabilization closure — 2026-07-18
+
+### Scope completed
+
+This closure preserved the approved AutoCodex v2 architecture. It did not run a model, OpenAI API request, live AutoCodex Run, push, merge, publish operation, or PR from inside AutoCodex.
+
+| Area | Result |
+| --- | --- |
+| Readonly validation contract | `ChangeValidationReport`, changed-file entries, Git guards, path-rule inputs, and v2 orchestrator path-rule handoff now use readonly arrays where the values are immutable. No casts or mutable defensive copies were introduced. |
+| FINAL historical timeline | A historical `FINAL_REPORT.md` without `final-result.json` uses valid terminal `completed`, not invalid `succeeded`. |
+| Legacy Continue Package prompt | The production expanded legacy rework prompt is unchanged. Its test uses semantic assertions for the original task, derived brief, `REWORK`, findings, required changes, acceptance criteria, no commit/push/merge, and audit preservation rather than whole-prompt equality. |
+| v2 isolation | Static source check found no Continue Package or legacy rework-flow import in `src/autocodex/orchestrator.ts`. |
+| UI API | Manual repository validation remains covered. `startRun` is asserted to fail closed with the v2 CLI `--project` and `--task-package` guidance before branch validation. |
+| Final reports and CSS | Tests now follow the renderer's `### Validation` capitalization and status lines. Timeline CSS is tested structurally for grid columns, a `minmax` text column, and overflow protection rather than obsolete pixel values. |
+
+### Environment and validation evidence
+
+| Field | Value |
+| --- | --- |
+| Node runtime used | `v22.22.2` (`/root/.nvm/versions/node/v22.22.2/bin/node`) |
+| npm runtime used | `11.4.2` |
+| Stabilization implementation commit | `8992728baebb37d848463c9a82737c6ae5c3a307` (`Stabilize AutoCodex v2 offline contracts`) |
+| Working-tree state before this handoff metadata update | clean (`## work`) |
+
+| Command | Exit code | Result |
+| --- | ---: | --- |
+| `npm ci --no-audit --no-fund` | `1` | Environment blocked dependency installation: package firewall returned `403 Forbidden` for locked `zod-4.4.3.tgz`. |
+| `npm run typecheck` | `2` | Blocked before source checking because `@types/node` and `vitest/globals` are unavailable without dependencies. |
+| `npx vitest run tests/continuePackage.test.ts` | `1` | Blocked before test execution: registry request for `vitest` returned `403 Forbidden`. |
+| `npx vitest run tests/uiApi.test.ts` | `1` | Blocked before test execution: registry request for `vitest` returned `403 Forbidden`. |
+| `npx vitest run tests/uiRunContract.test.ts` | `1` | Blocked before test execution: registry request for `vitest` returned `403 Forbidden`. |
+| `npx vitest run tests/uiViewModel.test.ts` | `1` | Blocked before test execution: registry request for `vitest` returned `403 Forbidden`. |
+| `npm test` | `127` | Blocked: local `vitest` executable is absent because dependency installation failed. |
+| `npm run build` | `2` | Blocked before source build because `@types/node` and `vitest/globals` are unavailable without dependencies. |
+| `node -e "import('./dist/src/index.js').then(() => process.exit(0), error => { console.error(error); process.exit(1); })"` | `1` | Blocked: stale `dist` cannot resolve runtime dependency `yaml` without installed dependencies. |
+| `git diff --check` | `0` | Passed. |
+| `git status --short --branch` | `0` | Passed; the implementation commit's working tree was clean before this handoff metadata update. |
+
+### Merge-gate disposition
+
+`BLOCKED_ENVIRONMENT` — **not** `READY_FOR_MERGE`. The requested Node 22 runtime is available and was used, but dependency installation is prohibited by the environment's package firewall. Therefore typecheck, the targeted Vitest tests, the 252/252 suite gate, build, and dist smoke cannot be truthfully marked passing. Re-run the listed commands in an environment with the lockfile dependencies available before declaring `READY_FOR_MERGE`.

@@ -490,7 +490,8 @@ test("all-skipped validation renders skipped in timeline, VALIDATION report, and
     path.join(f.runDir, "FINAL_REPORT.md"),
     "utf8",
   );
-  expect(finalMd).toContain("### VALIDATION\n- status: skipped");
+  expect(finalMd).toContain("### Validation");
+  expect(finalMd).toContain("- status: skipped");
   expect(finalMd).toContain(
     "[docs/AUTOCODEX_E2E_TEST.md](docs/AUTOCODEX_E2E_TEST.md)",
   );
@@ -638,7 +639,8 @@ test("validation status consistency preserves FAIL, SKIPPED, and FINAL timeline 
     path.join(failBlocked.runDir, "FINAL_REPORT.md"),
     "utf8",
   );
-  expect(failFinal).toContain("### VALIDATION\n- status: failed");
+  expect(failFinal).toContain("### Validation");
+  expect(failFinal).toContain("- status: failed");
 
   const skipped = await fixture();
   await writeBase(skipped, "ACCEPT", "PASS");
@@ -687,5 +689,6 @@ test("validation status consistency preserves FAIL, SKIPPED, and FINAL timeline 
     path.join(skipped.runDir, "FINAL_REPORT.md"),
     "utf8",
   );
-  expect(skippedFinal).toContain("### VALIDATION\n- status: skipped");
+  expect(skippedFinal).toContain("### Validation");
+  expect(skippedFinal).toContain("- status: skipped");
 });

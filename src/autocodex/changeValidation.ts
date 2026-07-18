@@ -4,22 +4,22 @@ import { atomicWriteJson } from "./persistence.js";
 import { git, gitExitCode, gitRefSnapshot, parsePorcelainZ } from "./git.js";
 import type { TaskPackage } from "./taskPackage.js";
 
-export type AttemptGitGuards = { attemptBaseCommit: string; branch: string; tags: string[]; submodules: string[] };
+export type AttemptGitGuards = Readonly<{ attemptBaseCommit: string; branch: string; tags: readonly string[]; submodules: readonly string[] }>;
 export type ChangeValidationStatus = "PASS" | "FAIL" | "BLOCKED";
-export type ChangedFile = { path: string; status: string; untracked: boolean };
-export type ChangeValidationReport = {
+export type ChangedFile = Readonly<{ path: string; status: string; untracked: boolean }>;
+export type ChangeValidationReport = Readonly<{
   schemaVersion: 2; status: ChangeValidationStatus; taskId: string; stepId: string; attemptId: string; runId: string;
-  attemptBaseCommit: string; headCommit?: string; branch?: string; changedFiles: ChangedFile[]; violations: string[];
-  globalPathRules: string[]; stepPathRules: string[]; generatedAt: string;
-};
+  attemptBaseCommit: string; headCommit?: string; branch?: string; changedFiles: readonly ChangedFile[]; violations: readonly string[];
+  globalPathRules: readonly string[]; stepPathRules: readonly string[]; generatedAt: string;
+}>;
 
 export type ChangeValidationInput = {
   workspacePath: string; artifactDir: string; taskId: string; stepId: string; attemptId: string; runId: string;
-  attemptBaseCommit: string; expectedBranch?: string; attemptBaseTags?: string[]; attemptBaseSubmodules?: string[];
+  attemptBaseCommit: string; expectedBranch?: string; attemptBaseTags?: readonly string[]; attemptBaseSubmodules?: readonly string[];
   /** A path to the immutable task package, if it is inside the workspace. */ taskPackageDir?: string;
   taskPackagePath?: string; taskPackage?: Pick<TaskPackage, "steps">;
-  /** Every changed path must satisfy both non-empty lists. */ globalPathRules?: string[]; stepPathRules?: string[];
-  /** Compatibility aliases for callers which call them allowed paths. */ allowedPaths?: string[]; stepAllowedPaths?: string[];
+  /** Every changed path must satisfy both non-empty lists. */ globalPathRules?: readonly string[]; stepPathRules?: readonly string[];
+  /** Compatibility aliases for callers which call them allowed paths. */ allowedPaths?: readonly string[]; stepAllowedPaths?: readonly string[];
 };
 
 function same(a: readonly string[], b: readonly string[]): boolean { return JSON.stringify([...a].sort()) === JSON.stringify([...b].sort()); }
