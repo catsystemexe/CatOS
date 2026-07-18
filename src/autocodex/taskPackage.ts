@@ -31,9 +31,18 @@ export const taskPackageSchema = z.object({
   }
   for (const step of pkg.steps) for (const dep of step.dependsOn) if (!stepIds.has(dep)) ctx.addIssue({ code: "custom", path: ["steps", step.id, "dependsOn"], message: `Unknown step: ${dep}` });
 });
-export type TaskPackage = z.infer<typeof taskPackageSchema>;
+type TaskPackageData = z.infer<typeof taskPackageSchema>;
+export type DeepReadonly<T> = T extends (...args: readonly never[]) => unknown ? T : T extends readonly (infer U)[] ? readonly DeepReadonly<U>[] : T extends object ? { readonly [K in keyof T]: DeepReadonly<T[K]> } : T;
+export type TaskPackage = DeepReadonly<TaskPackageData>;
+function deepFreeze<T>(value: T): DeepReadonly<T> {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value as DeepReadonly<T>;
+}
 export const taskContentSha256 = (task: string): string => createHash("sha256").update(task, "utf8").digest("hex");
-export function parseTaskPackage(value: unknown): TaskPackage { return taskPackageSchema.parse(value); }
+export function parseTaskPackage(value: unknown): TaskPackage { return deepFreeze(taskPackageSchema.parse(value)); }
 /** Reads only a complete schema-valid task file; malformed/partial data is rejected. */
 export async function readTaskPackage(packageDir: string): Promise<TaskPackage> {
   const file = await realpathWithinPackage(packageDir, TASK_FILE);

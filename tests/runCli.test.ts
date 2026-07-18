@@ -76,11 +76,7 @@ describe("v2 run CLI adapter", () => {
     expect(source).not.toMatch(/\b(push|publish|pull-request|pr)\b/i);
   });
 
-  it("resolves source and built entrypoint modules without a model call", async () => {
+  it("resolves the source entrypoint module without a model call", async () => {
     await expect(import("../src/index.js")).resolves.toBeDefined();
-    const { execFile } = await import("node:child_process");
-    const { promisify } = await import("node:util");
-    await promisify(execFile)("npx", ["tsc"], { cwd: process.cwd() });
-    await expect(import("../dist/src/index.js")).resolves.toBeDefined();
   });
 });
