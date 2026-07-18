@@ -7,7 +7,8 @@ import { runTestProcess, type TestProcessResult } from "./testRunner.js";
 
 export type CheckPhase = "BASELINE" | "POST_COMMIT";
 export type CheckStatus = "PASS" | "FAIL" | "TIMEOUT" | "SIGNAL" | "RUNNER_ERROR" | "GIT_MUTATION";
-export type CheckResult = Readonly<{ id: string; argv: readonly string[]; required: boolean; blocking: boolean; mustPassAtBaseline: boolean; cwd: string; timeoutSeconds: number; status: CheckStatus; process: TestProcessResult; gitViolation?: string }>;
+export type CheckFailureKind = "TIMEOUT" | "SIGNAL" | "RUNNER_ERROR" | "GIT_MUTATION";
+export type CheckResult = Readonly<{ id: string; argv: readonly string[]; required: boolean; blocking: boolean; mustPassAtBaseline: boolean; cwd: string; timeoutSeconds: number; status: CheckStatus; process: TestProcessResult; failureKind?: CheckFailureKind; gitViolation?: string }>;
 export type CheckRunReport = Readonly<{ schemaVersion: 2; phase: CheckPhase; status: "PASS" | "REWORK_TESTS" | "FAILED_TEST_PROCESS"; expectedHead: string; results: readonly CheckResult[]; startedAt: string; finishedAt: string }>;
 
 function inside(parent: string, child: string): boolean { const relative = path.relative(parent, child); return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative)); }
@@ -24,6 +25,13 @@ async function gitInvariant(workspacePath: string, expectedHead: string): Promis
     if (head.trim() !== expectedHead) return `HEAD changed: expected ${expectedHead}, got ${head.trim()}.`;
     if (dirty) return "Worktree changed while running checks.";
   } catch (error) { return `Git guard failed: ${error instanceof Error ? error.message : String(error)}`; }
+  return undefined;
+}
+function failureKindFor(process: TestProcessResult, violation?: string): CheckFailureKind | undefined {
+  if (violation) return "GIT_MUTATION";
+  if (process.runnerError) return "RUNNER_ERROR";
+  if (process.timedOut) return "TIMEOUT";
+  if (process.signal) return "SIGNAL";
   return undefined;
 }
 function statusFor(process: TestProcessResult): CheckStatus {
@@ -45,7 +53,8 @@ export async function runTaskChecks(input: { task: TaskPackage; workspacePath: s
     const root = path.join(input.artifactDir, input.phase.toLowerCase(), check.id);
     const process = await runTestProcess({ argv: check.argv, cwd, timeoutMs: input.timeoutMs ?? check.timeoutSeconds * 1_000, environment: input.environment, logPaths: { stdout: path.join(root, "stdout.log"), stderr: path.join(root, "stderr.log") } });
     const violation = await gitInvariant(workspacePath, expectedHead);
-    results.push(Object.freeze({ id: check.id, argv: check.argv, required: check.required, blocking: check.blocking, mustPassAtBaseline: check.mustPassAtBaseline, cwd, timeoutSeconds: check.timeoutSeconds, status: violation ? "GIT_MUTATION" : statusFor(process), process, ...(violation ? { gitViolation: violation } : {}) }));
+    const failureKind = failureKindFor(process, violation);
+    results.push(Object.freeze({ id: check.id, argv: check.argv, required: check.required, blocking: check.blocking, mustPassAtBaseline: check.mustPassAtBaseline, cwd, timeoutSeconds: check.timeoutSeconds, status: violation ? "GIT_MUTATION" : statusFor(process), process, ...(failureKind ? { failureKind } : {}), ...(violation ? { gitViolation: violation } : {}) }));
     processFailure = violation ?? (process.runnerError || process.timedOut || process.signal ? `Test process failure: ${check.id}` : undefined);
   }
   const finalInvariant = await gitInvariant(workspacePath, expectedHead); processFailure ??= finalInvariant;

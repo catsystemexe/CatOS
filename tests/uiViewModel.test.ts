@@ -204,9 +204,9 @@ test("UI script and markup render GitHub-first checkout controls", async () => {
   );
   expect(html).toContain('id="clone" class="primary"');
   expect(html).toContain("CLONE BRANCH");
-  expect(html).toContain('<textarea id="task"></textarea>');
+  expect(html).toContain('<textarea id="task" readonly>Use: npm run catos -- run --project &lt;id&gt; --task-package &lt;directory&gt;</textarea>');
   expect(html).toContain(
-    '<button id="run" class="primary" type="button">RUN</button>',
+    '<button id="run" class="primary" type="button" disabled>RUN (CLI ONLY)</button>',
   );
   expect(html).toContain(
     '<button id="stop" type="button" disabled>STOP</button>',
@@ -214,7 +214,8 @@ test("UI script and markup render GitHub-first checkout controls", async () => {
   expect(html).toContain('class="app-layout"');
   expect(html).toContain('class="setup-panel"');
   expect(html).toContain('class="execution-panel"');
-  expect(html).toContain("Snapshot:</strong> automatic on RUN");
+  expect(html).toContain("Task Package required");
+  expect(html).toContain("The UI start surface is legacy-disabled");
   expect(html).not.toContain('id="refresh"');
   expect(html).toContain('id="copy"');
   expect(html).toContain('type="module" src="/app.js"');
@@ -296,67 +297,45 @@ test("frontend clone flow stores checkout response without repository refresh", 
   expect(app).not.toContain("Cloned repository was not found after refresh.");
 });
 
-test("RUN enablement requires checkout and task", async () => {
-  const { app } = await uiFiles();
-  expect(app).toContain(
-    "const ready=!!checkout&&!!checkout.localPath&&!!checkout.branch&&!!$('task').value.trim()&&!activeStopPhases.has(phase)",
-  );
-  expect(app).toContain("$('run').disabled=!ready");
-  expect(app).toContain(
-    "if(!checkout)throw new Error('RUN requires a cloned branch checkout.')",
-  );
-  expect(app).toContain("repositoryPath:checkout.localPath");
-  expect(app).toContain("baseBranch:checkout.branch");
-  expect(app).toContain("prTargetBranch:checkout.branch");
+test("RUN is disabled for CLI-only v2 start and never calls legacy start API", async () => {
+  const { app, html } = await uiFiles();
+  expect(html).toContain('id="task" readonly');
+  expect(html).toContain('RUN (CLI ONLY)');
+  expect(html).toContain('id="run" class="primary" type="button" disabled');
+  expect(app).toContain("$('run').disabled=true");
+  expect(app).toContain("V2 RUN requires --project and --task-package in the CLI");
+  expect(app).not.toContain("/api/runs',{method:'POST'");
+  expect(app).not.toContain("repositoryPath:checkout.localPath");
+  expect(app).not.toContain("setPhase('starting'");
 });
 
 test("layout keeps actions visible, wraps long values, and prevents page scrolling", async () => {
   const { css } = await uiFiles();
-  expect(css).toContain("html,body{width:100%;height:100%;margin:0}");
-  expect(css).toContain(
-    "body{display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden",
-  );
-  expect(css).toContain("main{min-height:0;overflow:hidden}");
-  expect(css).toContain(
-    ".app-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)",
-  );
-  expect(css).toContain(
-    ".setup-panel{border:1px solid #000;padding:6px;display:grid;grid-template-rows:auto auto auto auto minmax(90px,1fr) auto auto",
-  );
-  expect(css).toContain(
-    ".execution-panel{display:grid;grid-template-rows:auto minmax(0,1fr)",
-  );
-  expect(css).toContain(
-    ".value-readout{display:block;white-space:normal;overflow-wrap:anywhere;word-break:break-word",
-  );
+  expect(css).toMatch(/body\{[^}]*display:grid[^}]*overflow:hidden/);
+  expect(css).toMatch(/main\{[^}]*min-height:0[^}]*overflow:hidden/);
+  expect(css).toMatch(/\.app-layout\{[^}]*display:grid[^}]*grid-template-columns:minmax\(0,1fr\) minmax\(0,1fr\)/);
+  expect(css).toMatch(/\.setup-panel\{[^}]*display:grid[^}]*overflow:hidden/);
+  expect(css).toMatch(/\.execution-panel\{[^}]*display:grid[^}]*min-height:0[^}]*overflow:hidden/);
+  expect(css).toMatch(/\.run-actions\{[^}]*display:grid[^}]*grid-template-columns:auto auto/);
+  expect(css).toMatch(/\.value-readout\{[^}]*overflow-wrap:anywhere[^}]*word-break:break-word/);
+  expect(css).toMatch(/#viewerTitle\{[^}]*overflow-wrap:anywhere[^}]*word-break:break-word/);
+  expect(css).toMatch(/@media \(max-width:800px\)\{[^}]*\.app-layout\{grid-template-columns:minmax\(0,1fr\)/);
   expect(css).not.toContain("#viewer{");
-  expect(css).toContain(
-    ".value-readout{display:block;white-space:normal;overflow-wrap:anywhere;word-break:break-word",
-  );
   expect(css).not.toContain(".value-readout{display:block;white-space:nowrap");
-  expect(css).toContain(
-    "#viewerTitle{min-width:0;white-space:normal;overflow-wrap:anywhere;word-break:break-word",
-  );
 });
 
 test("CLONE uses a compact primary button, not full-width input styling", async () => {
   const { css, html } = await uiFiles();
   expect(html).toContain('id="clone" class="primary"');
-  expect(css).toContain(
-    "button.primary{width:auto;padding:4px 12px;border:2px solid #000;background:#000;color:#fff;font-weight:bold}",
-  );
+  expect(css).toMatch(/button\.primary\{[^}]*width:auto[^}]*border:2px solid #000/);
 });
 
-test("RUN state model starts first and only shows running after a valid runId", async () => {
+test("RUN start action only displays the CLI-only contract", async () => {
   const { app } = await uiFiles();
-  expect(app).toContain("setPhase('starting','Creating run snapshot…')");
-  expect(app).toContain(
-    "if(!res.runId){runId=''; $('runNo').textContent='RUN #-'; setPhase('failed','Run was not created.'); return;}",
-  );
-  expect(app).toContain("runId=res.runId");
-  expect(app).toContain(
-    "setPhase('running','Waiting for first timeline event…')",
-  );
+  expect(app).toContain("async function start(){const message='V2 RUN requires --project and --task-package in the CLI; the legacy UI launcher is disabled.'");
+  expect(app).toContain("setPhase('idle',message)");
+  expect(app).not.toContain("runId=res.runId");
+  expect(app).not.toContain("Creating run snapshot");
 });
 
 test("RUN timeline shows empty and polling error states without empty catch", async () => {

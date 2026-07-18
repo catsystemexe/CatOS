@@ -425,15 +425,15 @@ test("terminal result availability is checked from files", async () => {
   expect(s.steps.every((r) => r.report?.exists && r.report.readable)).toBe(true);
 });
 
-test("UI-started RUN requests Replit-compatible Codex runtime mode", async () => {
+test("UI start API is disabled for v2 CLI-only runs", async () => {
   const api = await readFile(
     new URL("../src/uiApi.ts", import.meta.url),
     "utf8",
   );
-  expect(api).toContain('"--sandbox-mode","danger-full-access"');
-  expect(api).toContain(
-    '"--pr-target",prTarget,"--sandbox-mode","danger-full-access"',
-  );
+  expect(api).toContain("UI start is disabled for AutoCodex v2");
+  expect(api).toContain("npm run catos -- run --project <id> --task-package <directory>");
+  expect(api).not.toContain('"--sandbox-mode","danger-full-access"');
+  expect(api).not.toContain('"--task",input.task');
 });
 
 test("all-skipped validation renders skipped in timeline, VALIDATION report, and FINAL report", async () => {

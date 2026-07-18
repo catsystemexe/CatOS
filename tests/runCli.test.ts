@@ -19,7 +19,7 @@ async function fixtureCwd(): Promise<string> {
   await mkdir(path.join(cwd, "repository"));
   await writeFile(path.join(cwd, "projects", "demo.yaml"), [
     "project:", "  id: demo", "  name: Demo", "  repoPath: ../repository",
-    "commands:", "  typecheck: true", "  test: true", "  build: true",
+    "commands:", "  typecheck: npm run typecheck", "  test: npm test", "  build: npm run build",
     "workflow:", "  maxReworkAttempts: 2", "  createCommit: true",
     "permissions:", "  allowNetwork: false", "  allowPush: false", "  allowMerge: false",
   ].join("\n"));

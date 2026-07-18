@@ -5,13 +5,19 @@ import { EVENTS_FILE, STATE_FILE } from "./artifactPaths.js";
 import type { RunState } from "./state.js";
 import { requiresExplicitResume } from "./state.js";
 
-export async function atomicWriteJson(filePath: string, value: unknown): Promise<void> {
+async function atomicWrite(filePath: string, content: string): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
   const temp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${randomUUID()}.tmp`);
   const handle = await open(temp, "wx", 0o600);
-  try { await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8"); await handle.sync(); }
+  try { await handle.writeFile(content, "utf8"); await handle.sync(); }
   finally { await handle.close(); }
   await rename(temp, filePath); // same directory guarantees same filesystem and atomic replacement
+}
+export async function atomicWriteJson(filePath: string, value: unknown): Promise<void> {
+  await atomicWrite(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+export async function atomicWriteText(filePath: string, content: string): Promise<void> {
+  await atomicWrite(filePath, content);
 }
 export async function readCompleteJson<T>(filePath: string): Promise<T> {
   try { return JSON.parse(await readFile(filePath, "utf8")) as T; }

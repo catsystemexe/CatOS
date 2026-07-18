@@ -400,7 +400,7 @@ export async function buildUiTimeline(
   }
   if (options.includeFinal !== false) {
     const final = await readJson<any>(path.join(runDir, "final-result.json"));
-    if (final) {
+    if (final || await exists(path.join(runDir, "FINAL_REPORT.md"))) {
       const report = await reportRef(runDir, "FINAL_REPORT.md");
       const sequence = rows.length + 1;
       rows.push({
@@ -412,7 +412,7 @@ export async function buildUiTimeline(
         attempt: parsed.at(-1)?.attempt.order ?? 1,
         name: "FINAL",
         label: "Final",
-        status: finalTimelineStatus(final?.status, legacyStatus(final?.status)),
+        status: final ? finalTimelineStatus(final?.status, legacyStatus(final?.status)) : "succeeded",
         startedAt: final?.startedAt,
         completedAt: final?.finishedAt,
         finishedAt: final?.finishedAt,
@@ -492,7 +492,8 @@ export async function buildUiSystemState(
     readable: reportAvailability.readable,
     downloadable: reportAvailability.downloadable,
   };
-  const outputs: UiOutput[] = [finalReport];
+  const legacyOutputs = await Promise.all(["01_CODEX_REPORT.md", "02_VALIDATION_REPORT.md", "03_REVIEW_REPORT.md"].map(async (file) => ({ file, availability: await fileAvailability(path.join(runDir, file)) })));
+  const outputs: UiOutput[] = [finalReport, ...legacyOutputs.filter((entry) => entry.availability.readable || entry.availability.downloadable).map((entry) => ({ label: entry.file, path: entry.file, readable: entry.availability.readable, downloadable: entry.availability.downloadable }))];
   return {
     humanReview: status === "human_required",
     terminalMessage:
