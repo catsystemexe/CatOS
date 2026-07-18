@@ -1,7 +1,7 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { runArtifactPath } from "./artifactPaths.js";
 import { writeArtifactManifest, type ArtifactManifest } from "./artifactManifest.js";
-import { atomicWriteJson } from "./persistence.js";
+import { atomicWriteJson, atomicWriteText } from "./persistence.js";
 import { createRuntimeManifest, type RuntimeManifest, type RuntimeManifestInput } from "./runtimeManifest.js";
 import { collectOpenIssues, renderOpenIssues, renderReviewPacket, renderRunSummary, type FinalArtifactData, type FinalRunStatus } from "./renderArtifacts.js";
 
@@ -14,11 +14,11 @@ function assertFinalDiffBoundary(diff: FinalArtifactData["finalDiff"]): void { i
  * failures and cancellations retain all structured evidence gathered so far.
  */
 export async function finalizeRun(input: FinalizeRunInput): Promise<FinalizeRunResult> {
-  assertFinalDiffBoundary(input.finalDiff); await mkdir(input.runDir, { recursive: true });
+  assertFinalDiffBoundary(input.finalDiff); await Promise.all([mkdir(input.runDir, { recursive: true }), mkdir(runArtifactPath(input.runDir, "final"), { recursive: true })]);
   const runtime = createRuntimeManifest(input.runtime ?? {});
   await atomicWriteJson(runArtifactPath(input.runDir, "runtime"), runtime);
-  await Promise.all([writeFile(runArtifactPath(input.runDir, "runSummary"), renderRunSummary(input), "utf8"), writeFile(runArtifactPath(input.runDir, "reviewPacket"), renderReviewPacket(input), "utf8"), writeFile(runArtifactPath(input.runDir, "openIssues"), renderOpenIssues(input), "utf8"), atomicWriteJson(runArtifactPath(input.runDir, "testSummary"), { schemaVersion: 1, reports: input.testReports ?? [] })]);
-  if (input.finalDiff) await writeFile(runArtifactPath(input.runDir, "finalDiff"), input.finalDiff.patch, "utf8");
+  await Promise.all([atomicWriteText(runArtifactPath(input.runDir, "runSummary"), renderRunSummary(input)), atomicWriteText(runArtifactPath(input.runDir, "reviewPacket"), renderReviewPacket(input)), atomicWriteText(runArtifactPath(input.runDir, "openIssues"), renderOpenIssues(input)), atomicWriteJson(runArtifactPath(input.runDir, "testSummary"), { schemaVersion: 1, reports: input.testReports ?? [] })]);
+  if (input.finalDiff) await atomicWriteText(runArtifactPath(input.runDir, "finalDiff"), input.finalDiff.patch);
   const manifest = await writeArtifactManifest(input.runDir);
   return Object.freeze({ status: input.status, runtime, manifest, openIssueCount: collectOpenIssues(input).length });
 }

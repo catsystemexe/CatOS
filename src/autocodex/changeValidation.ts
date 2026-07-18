@@ -22,14 +22,14 @@ export type ChangeValidationInput = {
   /** Compatibility aliases for callers which call them allowed paths. */ allowedPaths?: string[]; stepAllowedPaths?: string[];
 };
 
-function same(a: string[], b: string[]): boolean { return JSON.stringify([...a].sort()) === JSON.stringify([...b].sort()); }
+function same(a: readonly string[], b: readonly string[]): boolean { return JSON.stringify([...a].sort()) === JSON.stringify([...b].sort()); }
 function normal(p: string): string { return p.replace(/\\/g, "/").replace(/^\.\//, ""); }
 function glob(pattern: string, value: string): boolean {
   if (!pattern || pattern.includes("\0") || path.isAbsolute(pattern) || pattern.split(/[\\/]+/).includes("..")) return false;
   const escaped = normal(pattern).replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*/g, "\u0001").replace(/\*/g, "[^/]*").replace(/\u0001/g, ".*").replace(/\?/g, "[^/]");
   return new RegExp(`^${escaped}$`).test(value);
 }
-function taskRules(input: ChangeValidationInput): string[] {
+function taskRules(input: ChangeValidationInput): readonly string[] {
   if (input.stepPathRules) return input.stepPathRules;
   if (input.stepAllowedPaths) return input.stepAllowedPaths;
   return input.taskPackage?.steps.find((step) => step.id === input.stepId)?.files ?? [];
