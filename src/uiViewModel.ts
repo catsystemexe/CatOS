@@ -412,7 +412,7 @@ export async function buildUiTimeline(
         attempt: parsed.at(-1)?.attempt.order ?? 1,
         name: "FINAL",
         label: "Final",
-        status: final ? finalTimelineStatus(final?.status, legacyStatus(final?.status)) : "succeeded",
+        status: final ? finalTimelineStatus(final?.status, legacyStatus(final?.status)) : "completed",
         startedAt: final?.startedAt,
         completedAt: final?.finishedAt,
         finishedAt: final?.finishedAt,

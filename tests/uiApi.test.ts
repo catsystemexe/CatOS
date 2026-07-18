@@ -44,11 +44,12 @@ test("repo selector is populated from GitHub API only while manual branches stil
   expect(branches.branches.map((b) => b.name)).toContain("main");
 });
 
-test("manual repo path validates and startRun rejects missing branch", async () => {
+test("manual repo path validates while v2 UI start fails closed", async () => {
   const cwd = await root();
   const p = await repo(cwd);
   await expect(loadManualRepository(p)).resolves.toMatchObject({ repository: { path: p } });
-  await expect(startRun({ repositoryPath: p, baseBranch: "missing", prTargetBranch: "main", task: "x" }, { cwd, runsDir: path.join(cwd, "runs") })).rejects.toThrow("Base branch not found");
+  await expect(startRun({ repositoryPath: p, baseBranch: "missing", prTargetBranch: "main", task: "x" }, { cwd, runsDir: path.join(cwd, "runs") })).rejects.toThrow("UI start is disabled for AutoCodex v2");
+  await expect(startRun({ repositoryPath: p, baseBranch: "missing", prTargetBranch: "main", task: "x" }, { cwd, runsDir: path.join(cwd, "runs") })).rejects.toThrow("--project <id> --task-package <directory>");
 });
 
 test("API API MVP clone flow returns checkout localPath for run payload", async () => {

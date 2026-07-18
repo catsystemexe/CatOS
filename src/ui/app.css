@@ -36,7 +36,7 @@ button.primary:disabled{background:#fff;color:#555;border-color:#000}
 .timeline-wrap{min-height:0;overflow:auto;border-top:1px solid #ddd}
 .timeline-list{display:grid;min-width:0}
 .timeline-empty{padding:6px 2px;color:#444}
-.timeline-row{display:grid;grid-template-columns:22px minmax(96px,1fr) 106px 46px 92px;column-gap:4px;align-items:center;padding:1px 2px;border-bottom:1px solid #ddd;min-height:19px;font-size:11px;line-height:1.15;cursor:pointer}
+.timeline-row{display:grid;grid-template-columns:22px minmax(96px,1fr) 106px 46px 92px;column-gap:4px;align-items:center;min-width:0;overflow:hidden;padding:1px 2px;border-bottom:1px solid #ddd;min-height:19px;font-size:11px;line-height:1.15;cursor:pointer}
 .timeline-row.selected{background:#eef3ff;outline:1px solid #8aa4d6;outline-offset:-1px}
 .timeline-index,.timeline-status,.timeline-time{color:#333;white-space:nowrap}.timeline-status{display:flex;align-items:center;gap:4px;min-width:0}.timeline-status span:first-child{overflow:hidden;text-overflow:ellipsis}
 .timeline-step{display:flex;align-items:center;gap:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.timeline-step span:last-child{overflow:hidden;text-overflow:ellipsis}.timeline-icon{display:inline-grid;place-items:center;flex:0 0 15px;width:15px;height:15px;border:1px solid currentColor;border-radius:50%;line-height:1}.timeline-icon svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}.codex-icon{background:#101828;color:#7dd3fc}.gpt-icon{background:#f0fdf4;color:#15803d}.script-icon{border-radius:3px;background:#fff7ed;color:#c2410c}

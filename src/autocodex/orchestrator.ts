@@ -14,7 +14,7 @@ import type { TaskPackage } from "./taskPackage.js";
 
 export type OrchestratorInput = Readonly<{
   task: TaskPackage; workspacePath: string; artifactDir: string; runId: string; executable: string;
-  timeoutMs?: number; maxReworks?: number; globalPathRules?: string[]; taskPackageDir?: string; taskPackagePath?: string;
+  timeoutMs?: number; maxReworks?: number; globalPathRules?: readonly string[]; taskPackageDir?: string; taskPackagePath?: string;
   /** Optional task-level criteria are preserved in the Review snapshot. */ acceptanceCriteria?: readonly string[];
   sourceEnv?: NodeJS.ProcessEnv; extraEnv?: NodeJS.ProcessEnv;
 }>;
@@ -46,7 +46,7 @@ export async function orchestrate(input: OrchestratorInput): Promise<Orchestrato
       const coding = await runCodex<CodingResult>({ executable: input.executable, mode: "coding", prompt: codingPrompt.prompt, cwd: input.workspacePath, artifactDirectory: path.join(directory, "coding"), timeoutMs: input.timeoutMs ?? 120_000, sourceEnv: input.sourceEnv, extraEnv: input.extraEnv });
       await atomicWriteJson(path.join(directory, "coding-result.json"), coding.result);
       if (coding.result.status === "BLOCKED") { outcomes.push(frozen({ stepId: step.id, status: "BLOCKED", attempts: number, commits: frozen(commits), review: undefined })); return frozen({ status: "BLOCKED", steps: frozen(outcomes) }); }
-      const validationInput = { workspacePath: input.workspacePath, artifactDir: directory, taskId: task.taskId, stepId: step.id, attemptId: id, runId: input.runId, attemptBaseCommit: guards.attemptBaseCommit, expectedBranch: guards.branch, attemptBaseTags: guards.tags, attemptBaseSubmodules: guards.submodules, globalPathRules: input.globalPathRules ?? ["**"], stepPathRules: step.files.length ? [...step.files] : ["**"], taskPackageDir: input.taskPackageDir, taskPackagePath: input.taskPackagePath };
+      const validationInput = { workspacePath: input.workspacePath, artifactDir: directory, taskId: task.taskId, stepId: step.id, attemptId: id, runId: input.runId, attemptBaseCommit: guards.attemptBaseCommit, expectedBranch: guards.branch, attemptBaseTags: guards.tags, attemptBaseSubmodules: guards.submodules, globalPathRules: input.globalPathRules ?? ["**"], stepPathRules: step.files.length ? step.files : ["**"], taskPackageDir: input.taskPackageDir, taskPackagePath: input.taskPackagePath };
       const validation: ChangeValidationReport = await validateChanges(validationInput);
       if (validation.status !== "PASS") { await discardUncommitted(input.workspacePath); if (number > maxReworks) { outcomes.push(frozen({ stepId: step.id, status: "REWORK_LIMIT_REACHED", attempts: number, commits: frozen(commits) })); return frozen({ status: "REWORK_LIMIT_REACHED", steps: frozen(outcomes) }); } context = createReworkContext({ attemptNumber: number, validation }); continue; }
       const commit = await commitValidatedChanges({ ...validationInput, validation, codingStatus: coding.result.status }); commits.push(commit);

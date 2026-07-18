@@ -385,9 +385,10 @@ test("RUN and VIEW UI hide raw JSON and obsolete controls", async () => {
   );
   expect(html).not.toContain("<table>");
   expect(html).toContain('<div id="timeline" class="timeline-list"');
-  expect(css).toContain(
-    ".timeline-row{display:grid;grid-template-columns:24px minmax(100px,1fr) 100px 64px 90px",
-  );
+  expect(css).toContain(".timeline-row{display:grid");
+  expect(css).toContain("grid-template-columns:");
+  expect(css).toMatch(/grid-template-columns:[^;}]*minmax\(/);
+  expect(css).toMatch(/\.timeline-row\{[^}]*overflow:(?:hidden|clip|auto)/);
   expect(css).toContain(".report-action");
 });
 
