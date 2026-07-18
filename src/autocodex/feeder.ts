@@ -2,7 +2,7 @@ import type { TaskPackage } from "./taskPackage.js";
 import { CODING_TEMPLATE_VERSION, codingTemplate } from "./templates/coding.v1.js";
 import { REVIEW_TEMPLATE_VERSION, reviewTemplate } from "./templates/review.v1.js";
 
-export type FrozenTaskPackage = Readonly<TaskPackage>;
+export type FrozenTaskPackage = TaskPackage;
 export type FeederStep = Readonly<{ id: string; title: string; [key: string]: unknown }>;
 export type FeederAttempt = Readonly<{ id?: string; attemptId?: string; number?: number; [key: string]: unknown }>;
 export type ReworkContext = Readonly<Record<string, unknown>> | null;

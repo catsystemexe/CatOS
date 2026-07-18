@@ -32,7 +32,8 @@ export const reviewResultSchema = z.object({
   if (value.decision === "REWORK" && !value.requiredChanges.length) ctx.addIssue({ code: "custom", path: ["requiredChanges"], message: "REWORK requires at least one required change" });
   if (value.decision === "BLOCKED" && !value.blocker) ctx.addIssue({ code: "custom", path: ["blocker"], message: "BLOCKED requires an explicit external or human blocker" });
 });
-export type ReviewResult = z.infer<typeof reviewResultSchema>;
+export type ReviewResultData = z.infer<typeof reviewResultSchema>;
+export type ReviewResult = Omit<ReviewResultData, "requiredChanges" | "nonBlockingNotes"> & Readonly<{ requiredChanges: readonly Readonly<z.infer<typeof reviewRequiredChangeSchema>>[]; nonBlockingNotes: readonly string[] }>;
 
 export const codingResultJsonSchema = z.toJSONSchema(codingResultSchema, { target: "draft-2020-12" });
 export const reviewResultJsonSchema = z.toJSONSchema(reviewResultSchema, { target: "draft-2020-12" });

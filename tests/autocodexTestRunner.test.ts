@@ -6,14 +6,14 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { runTaskChecks } from "../src/autocodex/checks.js";
 import { runTestProcess } from "../src/autocodex/testRunner.js";
-import type { TaskPackage } from "../src/autocodex/taskPackage.js";
+type TestTaskPackage = { schemaVersion: 2; taskId: string; task: string; baseCommitSha: string; checks: { id: string; argv: string[]; required: boolean; blocking: boolean; timeoutSeconds: number; mustPassAtBaseline: boolean; cwd?: string }[]; steps: { id: string; title: string; dependsOn: string[]; checks: string[]; files: string[] }[] };
 
 const exec = promisify(execFile);
 async function fixture() {
   const workspace = await mkdtemp(path.join(os.tmpdir(), "catos-checks-")); const artifacts = path.join(workspace, "artifacts");
   await exec("git", ["init", "-q"], { cwd: workspace }); await exec("git", ["config", "user.name", "Test"], { cwd: workspace }); await exec("git", ["config", "user.email", "test@example.invalid"], { cwd: workspace });
   await writeFile(path.join(workspace, "README.md"), "base\n"); await exec("git", ["add", "."], { cwd: workspace }); await exec("git", ["commit", "-qm", "base"], { cwd: workspace });
-  const task: TaskPackage = { schemaVersion: 2, taskId: "task", task: "test", baseCommitSha: (await exec("git", ["rev-parse", "HEAD"], { cwd: workspace })).stdout.trim(), checks: [], steps: [{ id: "step", title: "step", dependsOn: [], checks: [], files: [] }] };
+  const task: TestTaskPackage = { schemaVersion: 2, taskId: "task", task: "test", baseCommitSha: (await exec("git", ["rev-parse", "HEAD"], { cwd: workspace })).stdout.trim(), checks: [], steps: [{ id: "step", title: "step", dependsOn: [], checks: [], files: [] }] };
   return { workspace, artifacts, task };
 }
 const node = (code: string) => [process.execPath, "-e", code];

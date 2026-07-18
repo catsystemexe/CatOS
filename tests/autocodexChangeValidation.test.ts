@@ -15,8 +15,9 @@ async function fixture() {
   await writeFile(path.join(workspace, "README.md"), "base\n"); await command(workspace, "add", "."); await command(workspace, "commit", "-qm", "base");
   return { workspace, artifacts };
 }
-async function input(f: Awaited<ReturnType<typeof fixture>>, guards = await captureAttemptGitGuards(f.workspace)) {
-  return { workspacePath: f.workspace, artifactDir: f.artifacts, taskId: "task", stepId: "step", attemptId: "attempt", runId: "run", ...guards, expectedBranch: guards.branch, attemptBaseTags: guards.tags, attemptBaseSubmodules: guards.submodules, globalPathRules: ["src/**"], stepPathRules: ["src/**"] };
+async function input(f: Awaited<ReturnType<typeof fixture>>, guards?: Awaited<ReturnType<typeof captureAttemptGitGuards>>) {
+  const resolvedGuards = guards ?? await captureAttemptGitGuards(f.workspace);
+  return { workspacePath: f.workspace, artifactDir: f.artifacts, taskId: "task", stepId: "step", attemptId: "attempt", runId: "run", ...resolvedGuards, expectedBranch: resolvedGuards.branch, attemptBaseTags: resolvedGuards.tags, attemptBaseSubmodules: resolvedGuards.submodules, globalPathRules: ["src/**"], stepPathRules: ["src/**"] };
 }
 
 describe("AutoCodex v2 change validation", () => {

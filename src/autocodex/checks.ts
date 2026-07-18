@@ -34,7 +34,7 @@ function statusFor(process: TestProcessResult): CheckStatus {
 }
 
 /** Runs only Task Package argv metadata and checks Git invariants after every check and after the complete set. */
-export async function runTaskChecks(input: { task: Readonly<TaskPackage>; workspacePath: string; artifactDir: string; phase: CheckPhase; expectedHead?: string; stepId?: string; timeoutMs?: number; environment?: NodeJS.ProcessEnv }): Promise<CheckRunReport> {
+export async function runTaskChecks(input: { task: TaskPackage; workspacePath: string; artifactDir: string; phase: CheckPhase; expectedHead?: string; stepId?: string; timeoutMs?: number; environment?: NodeJS.ProcessEnv }): Promise<CheckRunReport> {
   const workspacePath = await realpath(input.workspacePath); const expectedHead = input.expectedHead ?? (await git(workspacePath, ["rev-parse", "HEAD"])).trim();
   const startedAt = new Date().toISOString(); const results: CheckResult[] = []; const selected = input.phase === "BASELINE" || !input.stepId ? input.task.checks : input.task.checks.filter((check) => input.task.steps.find((step) => step.id === input.stepId)?.checks.includes(check.id));
   await mkdir(input.artifactDir, { recursive: true });
